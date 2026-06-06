@@ -1,0 +1,156 @@
+"""Qdrant vector store with user-isolated collections."""
+import asyncio
+import gc
+import hashlib
+import logging
+import os
+import re
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger("rga_auditor.qdrant")
+
+MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
+
+DEFAULT_MAX_CITATIONS_PER_DOC = int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
+DEFAULT_MAX_CITATIONS_TOTAL = int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
+DEFAULT_RETRIEVE_K = int(os.getenv("RETRIEVE_K_PER_QUERY", "10"))
+
+
+class VectorStore:
+    def __init__(
+        self,
+        qdrant_url: Optional[str] = None,
+        qdrant_api_key: Optional[str] = None,
+        collection_name: str = "documents",
+    ) -> None:
+        from qdrant_client import QdrantClient
+        from sentence_transformers import SentenceTransformer
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
+        key = qdrant_api_key or os.getenv("QDRANT_API_KEY") or None
+        self.client = QdrantClient(url=url, api_key=key)
+        self.collection_name = collection_name
+        self.splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+        self.embedding_dim = 384
+        self._model: Optional[SentenceTransformer] = None
+        self._create_collection()
+
+    @property
+    def model(self):
+        if self._model is None:
+            self._load_model()
+        return self._model
+
+    def _load_model(self) -> None:
+        from sentence_transformers import SentenceTransformer
+        pkl = MODELS_DIR / "embedding_model.pkl"
+        if pkl.exists():
+            import joblib
+            self._model = joblib.load(str(pkl))
+            logger.info("Loaded embedding model from %s", pkl)
+        else:
+            logger.info("Downloading embedding model...")
+            self._model = SentenceTransformer("all-MiniLM-L6-v2")
+        logger.info("Embedding model ready")
+
+    def _create_collection(self) -> None:
+        from qdrant_client.http import models
+        try:
+            self.client.get_collection(self.collection_name)
+        except Exception:
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE),
+            )
+            # Payload indexes for user_id filter
+            self.client.create_payload_index(
+                collection_name=self.collection_name, field_name="user_id", field_schema=models.PayloadSchemaType.KEYWORD
+            )
+            self.client.create_payload_index(
+                collection_name=self.collection_name, field_name="document_id", field_schema=models.PayloadSchemaType.KEYWORD
+            )
+            logger.info("Created collection %s", self.collection_name)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        from .async_worker import run_sync
+        return asyncio.get_event_loop().run_until_complete(run_sync(self.model.encode, texts))
+
+    async def add_document(self, user_id: str, document_id: str, filename: str, text: str) -> int:
+        from qdrant_client.http import models
+        chunks = self.splitter.split_text(text)
+        if not chunks:
+            return 0
+        # batch encode
+        from .async_worker import run_sync
+        vectors = await run_sync(self.model.encode, chunks)
+        if hasattr(vectors, "tolist"):
+            vectors = vectors.tolist()
+        gc.collect()
+        points = [
+            models.PointStruct(
+                id=int(hashlib.md5(f"{document_id}:{i}".encode()).hexdigest()[:16], 16),
+                vector=v,
+                payload={
+                    "user_id": user_id,
+                    "document_id": document_id,
+                    "filename": filename,
+                    "chunk_index": i,
+                    "text": chunk,
+                },
+            )
+            for i, (chunk, v) in enumerate(zip(chunks, vectors))
+        ]
+        self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+        return len(chunks)
+
+    def search(
+        self,
+        user_id: str,
+        query: str,
+        k: int = 10,
+        document_ids: Optional[list[str]] = None,
+    ) -> list[dict]:
+        from .async_worker import run_sync
+        vec = run_sync(self.model.encode, [query])
+        if hasattr(vec, "tolist"):
+            vec = vec.tolist()
+        from qdrant_client.http import models
+        flt = models.Filter(must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))])
+        if document_ids:
+            flt.must.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
+        results = self.client.search(
+            collection_name=self.collection_name, query_vector=vec[0], limit=k, query_filter=flt
+        )
+        return [
+            {
+                "id": r.id,
+                "score": float(r.score),
+                "document_id": r.payload.get("document_id"),
+                "filename": r.payload.get("filename"),
+                "chunk_index": r.payload.get("chunk_index"),
+                "text": r.payload.get("text", ""),
+            }
+            for r in results
+        ]
+
+    def delete_document(self, user_id: str, document_id: str) -> None:
+        from qdrant_client.http import models
+        flt = models.Filter(
+            must=[
+                models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id)),
+                models.FieldCondition(key="document_id", match=models.MatchValue(value=document_id)),
+            ]
+        )
+        self.client.delete(collection_name=self.collection_name, points_selector=models.FilterSelector(filter=flt))
+
+
+_store: Optional[VectorStore] = None
+
+
+def get_vector_store() -> VectorStore:
+    global _store
+    if _store is None:
+        _store = VectorStore()
+    return _store

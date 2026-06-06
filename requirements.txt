@@ -1,0 +1,55 @@
+# ── Core FastAPI ─────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic[email]>=2.10.0
+email-validator>=2.2.0
+pydantic-settings>=2.6.0
+python-multipart>=0.0.5
+httpx>=0.27.0
+python-dotenv>=1.0.0
+cachetools>=5.3.0
+
+# ── Document Parsing ─────────────────────────────────────────────────
+pypdf>=4.0.0
+python-docx>=1.1.0
+
+# ── Vector Store ─────────────────────────────────────────────────────
+qdrant-client>=1.9.0
+sentence-transformers>=3.0.0
+langchain-text-splitters>=0.3.0
+
+# ── Database ─────────────────────────────────────────────────────────
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+alembic>=1.14.0
+
+# ── Security — Auth & RBAC ───────────────────────────────────────────
+python-jose[cryptography]>=3.3.0
+bcrypt==4.0.1
+passlib[bcrypt]>=1.7.4
+
+# ── Security — Rate limiting ─────────────────────────────────────────
+slowapi>=0.1.9
+
+# ── Security — PII detection (optional, ~500 MB spaCy model) ─────────
+presidio-analyzer>=2.2
+presidio-anonymizer>=2.2
+
+# ── Security — Guardrails (optional) ─────────────────────────────────
+nemoguardrails>=0.10.0
+
+# ── Performance — Caching ───────────────────────────────────────────
+redis[hiredis]>=5.1.0
+
+# ── Resilience ───────────────────────────────────────────────────────
+tenacity>=8.3.0
+
+# ── Observability ───────────────────────────────────────────────────
+prometheus-client>=0.20.0
+python-json-logger>=2.0.7
+
+# ── Production server ───────────────────────────────────────────────
+gunicorn>=23.0.0
+
+# ── File storage (optional) ─────────────────────────────────────────
+cloudinary>=1.0.0
