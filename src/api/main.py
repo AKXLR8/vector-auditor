@@ -465,7 +465,7 @@ def create_app() -> FastAPI:
             try:
                 cli = get_cloudinary()
                 if cli:
-                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}")
+                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}", resource_type="auto")
                     if isinstance(res, dict):
                         cloudinary_url = res.get("secure_url") or res.get("url")
                         cloudinary_public_id = res.get("public_id")
