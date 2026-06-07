@@ -103,6 +103,7 @@ class Citation(BaseModel):
     location: str
     page: Optional[int] = None
     document_id: Optional[str] = None
+    file_url: Optional[str] = None
 
 
 class QueryRequest(BaseModel):

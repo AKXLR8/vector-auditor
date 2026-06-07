@@ -397,6 +397,15 @@ def create_app() -> FastAPI:
 
     # ── Query ─────────────────────────────────────────────────────────────
 
+    def _enrich_citations(citations: list[Citation], r: Request) -> list[Citation]:
+        out: list[Citation] = []
+        for c in citations:
+            d = c.model_dump()
+            if c.document_id and not c.file_url:
+                d["file_url"] = str(r.url_for("serve_file", doc_id=c.document_id))
+            out.append(Citation(**d))
+        return out
+
     @app.post("/query", response_model=QueryResponse)
     @limiter.limit("20/minute")
     async def query(request: Request, body: QueryRequest, user=Depends(current_user)):
@@ -406,7 +415,9 @@ def create_app() -> FastAPI:
             logger.info("PII entities in query: %s", [{k: v for k, v in e.items() if k != "text"} for e in pii])
         if not allowed:
             raise HTTPException(status_code=400, detail=refusal or "blocked by guardrails")
-        return await agent.query(user["id"], body)
+        resp = await agent.query(user["id"], body)
+        resp.citations = _enrich_citations(resp.citations, request)
+        return resp
 
     @app.post("/query/stream")
     @limiter.limit("20/minute")
@@ -421,6 +432,13 @@ def create_app() -> FastAPI:
         async def event_gen():
             try:
                 async for event in agent.stream_query(user["id"], body):
+                    if event.get("type") == "citations" and event.get("citations"):
+                        enriched = []
+                        for c in event["citations"]:
+                            if c.get("document_id") and not c.get("file_url"):
+                                c["file_url"] = str(request.url_for("serve_file", doc_id=c["document_id"]))
+                            enriched.append(c)
+                        event["citations"] = enriched
                     yield f"data: {json.dumps(event)}\n\n"
             except Exception as e:
                 err = json.dumps({"type": "error", "detail": str(e)[:500]})
@@ -435,7 +453,9 @@ def create_app() -> FastAPI:
         from ..services.llm import LLMError
         agent = _get_agent()
         try:
-            return await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
+            resp = await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
+            resp.citations = _enrich_citations(resp.citations, request)
+            return resp
         except LLMError as e:
             raise HTTPException(status_code=502, detail=str(e))
 
