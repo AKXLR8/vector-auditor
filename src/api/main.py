@@ -393,7 +393,9 @@ def create_app() -> FastAPI:
     @limiter.limit("20/minute")
     async def query(request: Request, body: QueryRequest, user=Depends(current_user)):
         agent = _get_agent()
-        allowed, refusal = await get_guardrails().check_input(body.question)
+        allowed, refusal, pii = await get_guardrails().check_input(body.question)
+        if pii:
+            logger.info("PII entities in query: %s", [{k: v for k, v in e.items() if k != "text"} for e in pii])
         if not allowed:
             raise HTTPException(status_code=400, detail=refusal or "blocked by guardrails")
         return await agent.query(user["id"], body)
@@ -402,7 +404,9 @@ def create_app() -> FastAPI:
     @limiter.limit("20/minute")
     async def query_stream(request: Request, body: QueryRequest, user=Depends(current_user)):
         agent = _get_agent()
-        allowed, refusal = await get_guardrails().check_input(body.question)
+        allowed, refusal, pii = await get_guardrails().check_input(body.question)
+        if pii:
+            logger.info("PII entities in query: %s", [{k: v for k, v in e.items() if k != "text"} for e in pii])
         if not allowed:
             raise HTTPException(status_code=400, detail=refusal or "blocked by guardrails")
 
