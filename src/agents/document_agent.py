@@ -32,8 +32,9 @@ logger = logging.getLogger("rga_auditor.agent")
 SYSTEM_WHITE_BOX = (
     "You are a meticulous research analyst. Answer the user's question using ONLY "
     "the provided context. Cite sources using [n] notation matching the numbered "
-    "context blocks. If the context is insufficient, say so explicitly. After your "
-    "answer, briefly note any reasoning or caveats. Be precise and concise."
+    "context blocks. If the context is insufficient, say so explicitly. "
+    "Structure your answer with clear sections: Summary, Key Findings, Analysis, "
+    "and Caveats. Be precise and concise."
 )
 
 SYSTEM_BLACK_BOX = (
@@ -109,7 +110,8 @@ class DocumentAgent:
             answer_tokens = estimate_tokens(cached)
             return cached, prompt_tokens, answer_tokens
         temperature = 0.0 if mode == Mode.black_box else None
-        answer = await self.llm.chat(prompt, system=sys, temperature=temperature)
+        max_tokens = 3048 if mode == Mode.white_box else None
+        answer = await self.llm.chat(prompt, system=sys, temperature=temperature, max_tokens=max_tokens)
         await cache.set(key, answer, CACHE_TTL["llm_response"])
         answer_tokens = estimate_tokens(answer)
         return answer, prompt_tokens, answer_tokens
@@ -251,7 +253,8 @@ class DocumentAgent:
             total_tokens = prompt_tokens
             answer_buf: list[str] = []
             temperature = 0.0 if req.mode == Mode.black_box else None
-            async for chunk in self.llm.astream(prompt, system=sys, temperature=temperature):
+            max_tokens = 3048 if req.mode == Mode.white_box else None
+            async for chunk in self.llm.astream(prompt, system=sys, temperature=temperature, max_tokens=max_tokens):
                 total_tokens += estimate_tokens(chunk)
                 answer_buf.append(chunk)
                 yield {"type": "token", "content": chunk}
