@@ -195,6 +195,8 @@ class JobQueueWorker:
                     except asyncio.TimeoutError:
                         pass
                     self.queue._wake.clear()
+                    if await self.queue.size() > 0:
+                        self.queue._wake.set()
                     continue
                 if self.processor is None:
                     await self.queue.fail(record, "no processor registered")
@@ -204,13 +206,16 @@ class JobQueueWorker:
                     await self.queue.complete(record)
                 except asyncio.TimeoutError:
                     await self.queue.fail(record, f"timeout after {PROCESSOR_TIMEOUT_S}s")
+                except asyncio.CancelledError:
+                    await self.queue.fail(record, "worker cancelled")
+                    raise
                 except Exception as e:
                     logger.exception("job %s failed", record.id)
                     await self.queue.fail(record, f"{type(e).__name__}: {e}"[:1000])
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception("worker loop error: %s", e)
+                logger.exception("worker loop error")
                 await asyncio.sleep(1.0)
 
 

@@ -78,7 +78,7 @@ class DocumentAgent:
         return out
 
     async def _retrieve(self, user_id: str, question: str, document_ids: Optional[list[str]], k: int) -> list[Citation]:
-        results = self.vs.search(user_id=user_id, query=question, k=k, document_ids=document_ids)
+        results = await self.vs.search(user_id=user_id, query=question, k=k, document_ids=document_ids)
         citations: list[Citation] = []
         for r in results:
             location = r.get("location") or f"chunk {r.get('chunk_index', 0)}"
@@ -92,7 +92,7 @@ class DocumentAgent:
             )
         return self._truncate_citations(citations)
 
-    async def _generate(self, question: str, context: list[Citation], mode: Mode, history: Optional[list[MessageHistory]]) -> tuple[str, int]:
+    async def _generate(self, question: str, context: list[Citation], mode: Mode, history: Optional[list[MessageHistory]]) -> tuple[str, int, int]:
         sys = SYSTEM_WHITE_BOX if mode == Mode.white_box else SYSTEM_BLACK_BOX
         ctx_lines = [f"[{i+1}] (source={c.source}, location={c.location})\n{c.quote}" for i, c in enumerate(context)]
         ctx_block = "\n\n".join(ctx_lines) if ctx_lines else "(no context)"
@@ -101,17 +101,18 @@ class DocumentAgent:
             turns = "\n".join(f"{m.role}: {m.content}" for m in history[-6:])
             history_block = f"\n\nConversation so far:\n{turns}\n"
         prompt = f"Context:\n{ctx_block}\n{history_block}\nQuestion: {question}\nAnswer:"
+        prompt_tokens = estimate_tokens(prompt)
         key = cache_key("llm", mode.value, question, str([(c.source, c.location) for c in context]))
         cache = get_cache()
         cached = await cache.get(key)
         if cached:
-            tokens = estimate_tokens(prompt) + estimate_tokens(cached)
-            return cached, tokens
+            answer_tokens = estimate_tokens(cached)
+            return cached, prompt_tokens, answer_tokens
         temperature = 0.0 if mode == Mode.black_box else None
         answer = await self.llm.chat(prompt, system=sys, temperature=temperature)
         await cache.set(key, answer, CACHE_TTL["llm_response"])
-        tokens = estimate_tokens(prompt) + estimate_tokens(answer)
-        return answer, tokens
+        answer_tokens = estimate_tokens(answer)
+        return answer, prompt_tokens, answer_tokens
 
     async def _verify(self, question: str, answer: str, context: list[Citation]) -> str:
         if not context:
@@ -157,8 +158,9 @@ class DocumentAgent:
                     all_citations.append(c)
             if len(all_citations) >= self.max_citations_total or not citations:
                 break
-            if req.mode == Mode.white_box and citations:
-                questions.append(f"More details about: {req.question}")
+            if req.mode == Mode.white_box and len(citations) >= self.max_citations_per_doc:
+                topics = ", ".join(c.quote[:80] for c in citations[:2])
+                questions.append(f"More context related to: {topics} — regarding {req.question}")
             else:
                 break
         all_citations = self._truncate_citations(all_citations)
@@ -167,7 +169,7 @@ class DocumentAgent:
         if req.mode == Mode.white_box:
             reasoning_path.append("Retrieved %d candidate citations across %d hop(s)" % (len(all_citations), min(len(questions), self.max_hops)))
 
-        answer, tokens = await self._generate(req.question, all_citations, req.mode, req.conversation_history)
+        answer, prompt_tokens, answer_tokens = await self._generate(req.question, all_citations, req.mode, req.conversation_history)
         if req.mode == Mode.white_box:
             reasoning_path.append("Generated answer with cite-and-explain framing")
 
@@ -181,13 +183,13 @@ class DocumentAgent:
                 reasoning_path.append("Identified %d research gap(s)" % len(gaps))
             reasoning_path.append("VERIFIED" if verification.startswith("VERIFIED") else f"ISSUES: {verification[:120]}")
 
-        cost = estimate_cost(tokens, estimate_tokens(answer))
+        cost = estimate_cost(prompt_tokens, answer_tokens)
         query_id = uuid.uuid4().hex
         return QueryResponse(
             answer=answer,
             citations=all_citations,
             reasoning_path=reasoning_path,
-            tokens_used=tokens,
+            tokens_used=prompt_tokens + answer_tokens,
             cost_usd=round(cost, 6),
             query_id=query_id,
             timestamp=datetime.utcnow().isoformat() + "Z",
@@ -209,38 +211,60 @@ class DocumentAgent:
         query_id = uuid.uuid4().hex
         timestamp = datetime.utcnow().isoformat() + "Z"
         try:
-            citations = await self._retrieve(user_id, req.question, req.document_ids, self.retrieve_k)
-            citations = self._truncate_citations(citations)
+            k = self.retrieve_k
+            all_citations: list[Citation] = []
+            seen: set[tuple[str, str]] = set()
+            questions = [req.question]
+            for hop in range(self.max_hops):
+                citations = await self._retrieve(user_id, questions[-1], req.document_ids, k)
+                for c in citations:
+                    key = (c.source, c.location)
+                    if key not in seen:
+                        seen.add(key)
+                        all_citations.append(c)
+                if len(all_citations) >= self.max_citations_total or not citations:
+                    break
+                if req.mode == Mode.white_box and len(citations) >= self.max_citations_per_doc:
+                    topics = ", ".join(c.quote[:80] for c in citations[:2])
+                    questions.append(f"More context related to: {topics} — regarding {req.question}")
+                else:
+                    break
+            all_citations = self._truncate_citations(all_citations)
 
             reasoning_path: list[str] = []
             if req.mode == Mode.white_box:
-                reasoning_path.append(f"Retrieved {len(citations)} citations")
+                reasoning_path.append(f"Retrieved {len(all_citations)} citations across {len(questions)} hop(s)")
 
             yield {
                 "type": "citations",
-                "citations": [c.model_dump() for c in citations],
+                "citations": [c.model_dump() for c in all_citations],
                 "query_id": query_id,
                 "reasoning_path": reasoning_path,
             }
 
             sys = SYSTEM_WHITE_BOX if req.mode == Mode.white_box else SYSTEM_BLACK_BOX
-            ctx_lines = [f"[{i+1}] (source={c.source}, location={c.location})\n{c.quote}" for i, c in enumerate(citations)]
+            ctx_lines = [f"[{i+1}] (source={c.source}, location={c.location})\n{c.quote}" for i, c in enumerate(all_citations)]
             ctx_block = "\n\n".join(ctx_lines) if ctx_lines else "(no context)"
             prompt = f"Context:\n{ctx_block}\n\nQuestion: {req.question}\nAnswer:"
 
+            prompt_tokens = estimate_tokens(prompt)
+            total_tokens = prompt_tokens
+            answer_buf: list[str] = []
             temperature = 0.0 if req.mode == Mode.black_box else None
-            total_tokens = estimate_tokens(prompt)
             async for chunk in self.llm.astream(prompt, system=sys, temperature=temperature):
                 total_tokens += estimate_tokens(chunk)
+                answer_buf.append(chunk)
                 yield {"type": "token", "content": chunk}
 
+            full_answer = "".join(answer_buf)
+            answer_tokens = total_tokens - prompt_tokens
+            cost = estimate_cost(prompt_tokens, answer_tokens)
+
             if req.mode == Mode.white_box:
-                # Reconstruct an answer string for verification (we don't keep a buffer
-                # here; the verify step is best-effort and skipped in stream mode).
-                verification = "verified inline"
+                verification = await self._verify(req.question, full_answer, all_citations)
                 yield {"type": "verification", "content": verification}
-                reasoning_path.append("Verified inline during streaming")
-                gaps = await self._gaps(req.question, citations)
+                reasoning_path.append("Verification: " + ("passed" if verification.startswith("VERIFIED") else "issues found"))
+                gaps = await self._gaps(req.question, all_citations)
                 for g in gaps:
                     yield {"type": "gap_analysis", "content": g}
                 if gaps:
@@ -249,6 +273,7 @@ class DocumentAgent:
             yield {
                 "type": "done",
                 "tokens_used": total_tokens,
+                "cost_usd": round(cost, 6),
                 "mode": req.mode.value,
                 "query_id": query_id,
                 "timestamp": timestamp,

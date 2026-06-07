@@ -41,15 +41,17 @@ class CircuitBreaker:
                 raise RuntimeError(f"circuit '{self.name}' is open")
         try:
             result = await fn(*args, **kwargs)
-        except Exception:
-            self._failures += 1
-            if self._failures >= self.failure_threshold:
-                self._opened_at = time.time()
-                logger.warning("circuit %s: OPENED after %d failures", self.name, self._failures)
+        except BaseException:
+            async with self._lock:
+                self._failures += 1
+                if self._failures >= self.failure_threshold:
+                    self._opened_at = time.time()
+                    logger.warning("circuit %s: OPENED after %d failures", self.name, self._failures)
             raise
         else:
-            if self._failures:
-                logger.info("circuit %s: reset after %d failures", self.name, self._failures)
-            self._failures = 0
-            self._opened_at = None
+            async with self._lock:
+                if self._failures:
+                    logger.info("circuit %s: reset after %d failures", self.name, self._failures)
+                self._failures = 0
+                self._opened_at = None
             return result

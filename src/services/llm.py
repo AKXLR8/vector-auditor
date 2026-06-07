@@ -1,4 +1,5 @@
 """LLM client for Inception AI (OpenAI-compatible)."""
+import json
 import logging
 import os
 from typing import AsyncIterator, Optional
@@ -32,7 +33,7 @@ class LLM:
         self.api_key = api_key
         self.base_url = (base_url or os.getenv("INCEPTION_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
         self.model = model or os.getenv("MERCURY_MODEL", DEFAULT_MODEL)
-        self.max_tokens = int(max_tokens or os.getenv("LLM_MAX_TOKENS", "2048"))
+        self.max_tokens = int(max_tokens) if max_tokens is not None else int(os.getenv("LLM_MAX_TOKENS", "2048"))
         self.temperature = float(temperature if temperature is not None else os.getenv("LLM_TEMPERATURE", "0"))
 
     @property
@@ -60,7 +61,8 @@ class LLM:
         async with httpx.AsyncClient(timeout=120.0) as client:
             r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=self._headers)
             if r.status_code != 200:
-                raise LLMError(f"Inception {r.status_code}: {r.text[:500]}")
+                body = (await r.aread())[:500].decode("utf-8", "ignore")
+                raise LLMError(f"Inception {r.status_code}: {body}")
             data = r.json()
             return data["choices"][0]["message"]["content"]
 
@@ -71,7 +73,6 @@ class LLM:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> AsyncIterator[str]:
-        """Yield text chunks as they arrive (SSE-style)."""
         messages: list[dict] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -98,7 +99,6 @@ class LLM:
                     if chunk == "[DONE]":
                         break
                     try:
-                        import json
                         data = json.loads(chunk)
                         delta = data["choices"][0].get("delta", {}).get("content")
                         if delta:

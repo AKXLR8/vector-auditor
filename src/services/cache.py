@@ -1,4 +1,5 @@
 """Cache backends. Redis when available, otherwise in-process cachetools.TTLCache."""
+import asyncio
 import hashlib
 import json
 import logging
@@ -32,30 +33,41 @@ class CacheBackend:
 
 class MemoryBackend(CacheBackend):
     def __init__(self, max_size: int = DEFAULT_MAX_ENTRIES) -> None:
-        from cachetools import TTLCache
-        self._store: "TTLCache[str, Any]" = TTLCache(maxsize=max_size, ttl=DEFAULT_MAX_ENTRIES)
+        self._store: dict[str, Any] = {}
+        self._expires: dict[str, float] = {}
+        self._max_size = max_size
 
     async def get(self, key: str) -> Optional[Any]:
+        self._evict_expired()
         try:
             return self._store[key]
         except KeyError:
             return None
 
     async def set(self, key: str, value: Any, ttl: int) -> None:
+        self._evict_expired()
+        if len(self._store) >= self._max_size:
+            return
+        import time
         self._store[key] = value
+        self._expires[key] = time.monotonic() + ttl
 
     async def delete(self, key: str) -> None:
-        try:
-            del self._store[key]
-        except KeyError:
-            pass
+        self._store.pop(key, None)
+        self._expires.pop(key, None)
 
     async def flush_pattern(self, pattern: str) -> None:
         for k in [k for k in list(self._store.keys()) if pattern in k]:
-            try:
-                del self._store[k]
-            except KeyError:
-                pass
+            self._store.pop(k, None)
+            self._expires.pop(k, None)
+
+    def _evict_expired(self) -> None:
+        import time
+        now = time.monotonic()
+        expired = [k for k, t in self._expires.items() if t < now]
+        for k in expired:
+            self._store.pop(k, None)
+            self._expires.pop(k, None)
 
 
 class RedisBackend(CacheBackend):
@@ -123,6 +135,10 @@ async def get_or_compute(key: str, ttl: int, fn):
     cached = await cache.get(key)
     if cached is not None:
         return cached
-    value = await fn() if callable(fn) else fn
+    if callable(fn):
+        result = fn()
+        value = await result if asyncio.iscoroutine(result) else result
+    else:
+        value = fn
     await cache.set(key, value, ttl)
     return value

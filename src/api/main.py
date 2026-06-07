@@ -148,7 +148,6 @@ def _parse_roles(value) -> list[str]:
         return [str(r) for r in value if r]
     if isinstance(value, str):
         try:
-            import json
             v = json.loads(value)
             if isinstance(v, list):
                 return [str(r) for r in v if r]
@@ -391,8 +390,6 @@ def create_app() -> FastAPI:
         allowed, refusal = await get_guardrails().check_input(body.question)
         if not allowed:
             raise HTTPException(status_code=400, detail=refusal or "blocked by guardrails")
-        if body.max_citations:
-            body.max_citations = min(body.max_citations, 100)
         return await agent.query(user["id"], body)
 
     @app.post("/query/stream")
@@ -459,7 +456,7 @@ def create_app() -> FastAPI:
                         cloudinary_url = res.get("secure_url") or res.get("url")
                         cloudinary_public_id = res.get("public_id")
             except Exception as e:
-                logger.debug("cloudinary upload skipped: %s", e)
+                logger.debug("cloudinary upload failed: %s", e)
 
             async with _maybe_session(sf) as s:
                 await create_document(
@@ -621,7 +618,7 @@ def create_app() -> FastAPI:
                 s, sid, user_id=user["id"],
                 role=body.role,
                 content=body.content,
-                citations=json.dumps([c.model_dump() for c in body.citations]) if body.citations else None,
+                citations=json.dumps([c.model_dump() for c in body.citations]) if body.citations is not None else None,
                 reasoning_path=json.dumps(body.reasoning_path) if body.reasoning_path else None,
                 tokens_used=body.tokens_used,
                 cost_usd=body.cost_usd,
@@ -630,17 +627,24 @@ def create_app() -> FastAPI:
             )
         if m is None:
             raise HTTPException(status_code=404, detail="session not found")
+        def _safe_json(val):
+            if val is None:
+                return None
+            try:
+                return json.loads(val)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return None
         return MessageResponse(
             id=m["id"],
             session_id=m.get("session_id", sid),
             role=m.get("role", "user"),
             content=m.get("content", ""),
-            citations=body.citations,
-            reasoning_path=body.reasoning_path,
-            tokens_used=body.tokens_used,
-            cost_usd=body.cost_usd,
-            query_id=body.query_id,
-            verification=body.verification,
+            citations=_safe_json(m.get("citations")),
+            reasoning_path=_safe_json(m.get("reasoning_path")),
+            tokens_used=m.get("tokens_used"),
+            cost_usd=m.get("cost_usd"),
+            query_id=m.get("query_id"),
+            verification=m.get("verification"),
             created_at=m.get("created_at"),
         )
 
@@ -717,13 +721,6 @@ def _get_agent() -> DocumentAgent:
 
 
 def set_upload_processor() -> None:
-    """Register the upload-processing callback. Call from bootstrap after init."""
-    from ..services.document_parser import parse_document
-    from ..database.session import get_session_factory
-    from ..job_queue import (
-        STAGE_CHUNKING, STAGE_EMBEDDING, STAGE_INDEXING, get_worker,
-    )
-
     async def _process(record) -> None:
         import time
         _t0 = time.time()

@@ -52,12 +52,17 @@ async def bootstrap_app() -> dict:
             logger.warning("bootstrap[%s] failed (dev mode, continuing): %s", name, e)
             return None
 
-    # 1. database
-    step("database", lambda: asyncio.get_event_loop().run_until_complete(init_engine()) if asyncio.get_event_loop().is_running() else None)
-    # Run async init synchronously via the current loop
-    if asyncio.get_event_loop().is_running():
+    t_db = time.time()
+    try:
         await init_engine()
-        status["steps"][-1] = {"name": "database", "ok": True, "ms": 0}
+        status["steps"].append({"name": "database", "ok": True, "ms": int((time.time() - t_db) * 1000)})
+        logger.info("bootstrap[database] OK in %dms", int((time.time() - t_db) * 1000))
+    except Exception as e:
+        status["steps"].append({"name": "database", "ok": False, "ms": int((time.time() - t_db) * 1000), "error": str(e)})
+        if s.is_production:
+            logger.critical("bootstrap[database] FAILED: %s", e)
+            raise StartupError(f"database init failed: {e}") from e
+        logger.warning("bootstrap[database] failed (dev mode, continuing): %s", e)
 
     # 2. cache
     step("cache", get_cache)
