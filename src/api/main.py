@@ -713,11 +713,8 @@ def create_app() -> FastAPI:
             logger.warning("DB init failed: %s — running with in-memory fallback", e)
 
         from ..vectorstore.Qdrant import get_vector_store
-        try:
-            get_vector_store()
-            logger.info("Vector store ready (model loaded)")
-        except Exception as e:
-            logger.warning("Vector store init failed: %s", e)
+        get_vector_store()
+        logger.info("Vector store ready (model loaded)")
 
         from ..job_queue import get_worker
         set_upload_processor()

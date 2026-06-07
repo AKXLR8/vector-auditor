@@ -25,14 +25,21 @@ class VectorStore:
         from sentence_transformers import SentenceTransformer
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-        url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
-        key = qdrant_api_key or os.getenv("QDRANT_API_KEY") or None
-        self.client = QdrantClient(url=url, api_key=key)
         self.collection_name = collection_name
         self.splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
         self.embedding_dim = 384
-        self._model: SentenceTransformer
-        self._create_collection()
+
+        url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
+        key = qdrant_api_key or os.getenv("QDRANT_API_KEY") or None
+        try:
+            self.client = QdrantClient(url=url, api_key=key)
+            self._create_collection()
+            logger.info("Qdrant connected to %s", url)
+        except Exception as e:
+            logger.warning("Qdrant unavailable at %s (%s) — falling back to :memory:", url, e)
+            self.client = QdrantClient(":memory:")
+            self._create_collection()
+
         self._load_model()
 
     def _load_model(self) -> None:
