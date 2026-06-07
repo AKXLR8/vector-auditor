@@ -287,12 +287,11 @@ class DocumentAgent:
 
     async def analyze_document(self, user_id: str, question: Optional[str], document_ids: Optional[list[str]],
                                 max_citations: Optional[int] = None) -> DocumentAnalysis:
-        doc_ids = document_ids or []
-        # Retrieve fairly from each document
-        if len(doc_ids) > 1:
-            per_doc = max(3, 12 // len(doc_ids))
+        req_doc_ids = document_ids or []
+        if len(req_doc_ids) > 1:
+            per_doc = max(3, 12 // len(req_doc_ids))
             citations: list[Citation] = []
-            for did in doc_ids:
+            for did in req_doc_ids:
                 part = await self._retrieve(user_id, question or "key findings and methodology", [did], per_doc)
                 citations.extend(part)
             if citations:
@@ -301,7 +300,7 @@ class DocumentAgent:
                     dedup.setdefault(c.quote, c)
                 citations = list(dedup.values())[:max_citations or 20]
         else:
-            citations = await self._retrieve(user_id, question or "key findings and methodology", doc_ids or None,
+            citations = await self._retrieve(user_id, question or "key findings and methodology", req_doc_ids or None,
                                               min(self.retrieve_k * 2, 20))
         citations = self._truncate_citations(citations)
         if not citations:
@@ -309,13 +308,13 @@ class DocumentAgent:
                 summary="No content found.", key_findings=[], methodology="",
                 research_gaps=[], contradictions=[], open_questions=[],
                 limitations="No documents accessible.", confidence="low",
-                citations=[], documents_analyzed=doc_ids,
+                citations=[], documents_analyzed=[],
             )
         ctx = "\n\n".join(f"[{i+1}] (source={c.source}) {c.quote}" for i, c in enumerate(citations))
         focus = question or "Provide a structured analysis comparing all documents."
-        is_multi = len(doc_ids) > 1
+        is_multi = len({c.source for c in citations}) > 1
         structure_instruction = (
-            "summary, key_findings (array of 3-5), methodology, "
+            "summary, key_findings (array of 4-7), methodology, "
             "research_gaps (array of 2-4), contradictions (array), open_questions (array of 2-3), "
             "limitations, confidence ('high'|'moderate'|'low')"
         )
@@ -324,14 +323,16 @@ class DocumentAgent:
                 ", cross_document_comparison (object with keys: common_themes, differences, "
                 "complementary_insights), per_document_summary (object keyed by filename with short summary)"
             )
+        docs_analyzed = sorted({c.source for c in citations})
         prompt = (
-            f"Based on the following document excerpts, produce a JSON object with keys: "
+            f"Based on the following document excerpts, produce a detailed JSON object with keys: "
             f"{structure_instruction}."
-            f"\n\nDocuments analyzed: {', '.join({c.source for c in citations})}"
+            f"\n\nDocuments analyzed: {', '.join(docs_analyzed)}"
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
             f"Return ONLY a valid JSON object, no commentary."
         )
-        raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.")
+        raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.",
+                                  max_tokens=4096)
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         data: dict = {}
         if m:
@@ -353,5 +354,5 @@ class DocumentAgent:
             limitations=data.get("limitations", ""),
             confidence=data.get("confidence", "moderate"),
             citations=citations,
-            documents_analyzed=doc_ids or list({c.source for c in citations}),
+            documents_analyzed=docs_analyzed,
         )
