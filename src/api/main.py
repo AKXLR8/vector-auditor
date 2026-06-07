@@ -420,8 +420,12 @@ def create_app() -> FastAPI:
     @app.post("/analyze", response_model=DocumentAnalysis)
     @limiter.limit("10/minute")
     async def analyze(request: Request, body: AnalyzeRequest, user=Depends(current_user)):
+        from ..services.llm import LLMError
         agent = _get_agent()
-        return await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
+        try:
+            return await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
+        except LLMError as e:
+            raise HTTPException(status_code=502, detail=str(e))
 
     # ── Documents ─────────────────────────────────────────────────────────
 

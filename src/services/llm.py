@@ -58,13 +58,16 @@ class LLM:
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": self.temperature if temperature is None else temperature,
         }
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=self._headers)
-            if r.status_code != 200:
-                body = (await r.aread())[:500].decode("utf-8", "ignore")
-                raise LLMError(f"Inception {r.status_code}: {body}")
-            data = r.json()
-            return data["choices"][0]["message"]["content"]
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=self._headers)
+                if r.status_code != 200:
+                    body = (await r.aread())[:500].decode("utf-8", "ignore")
+                    raise LLMError(f"Inception {r.status_code}: {body}")
+                data = r.json()
+                return data["choices"][0]["message"]["content"]
+        except httpx.ConnectError as e:
+            raise LLMError(f"Cannot reach {self.base_url}: {e}. Check INCEPTION_API_KEY and network.") from e
 
     async def astream(
         self,
