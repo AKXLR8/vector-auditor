@@ -28,7 +28,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -445,7 +445,7 @@ def create_app() -> FastAPI:
             safe = sanitize_filename(f.filename) or "document"
             doc_id = uuid.uuid4().hex
             upload_id = uuid.uuid4().hex
-            target = UPLOAD_DIR / f"{upload_id}_{safe}"
+            target = UPLOAD_DIR / f"{doc_id}_{safe}"
             target.write_bytes(content)
             digest = hashlib.sha256(content).hexdigest()
 
@@ -465,7 +465,7 @@ def create_app() -> FastAPI:
             try:
                 cli = get_cloudinary()
                 if cli:
-                    res = cli.upload_bytes(content, public_id=f"{user['id']}/{doc_id}")
+                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}")
                     if isinstance(res, dict):
                         cloudinary_url = res.get("secure_url") or res.get("url")
                         cloudinary_public_id = res.get("public_id")
@@ -533,6 +533,23 @@ def create_app() -> FastAPI:
         if record.user_id != user["id"]:
             raise HTTPException(status_code=404, detail="not found")
         return UploadStatusResponse(**record.to_status_dict())
+
+    @app.get("/files/{doc_id}")
+    async def serve_file(doc_id: str, user=Depends(current_user)):
+        sf = get_session_factory()
+        async with _maybe_session(sf) as s:
+            d = await get_document(s, doc_id)
+        if not d:
+            raise HTTPException(status_code=404, detail="document not found")
+        if d.get("uploaded_by") != user["id"]:
+            raise HTTPException(status_code=404, detail="not found")
+        if d.get("cloudinary_url"):
+            return RedirectResponse(url=d["cloudinary_url"])
+        safe = d.get("filename", "document")
+        local = UPLOAD_DIR / f"{doc_id}_{safe}"
+        if not local.exists():
+            raise HTTPException(status_code=404, detail="file not found on server")
+        return FileResponse(local, media_type="application/pdf", filename=safe)
 
     # ── Sessions ──────────────────────────────────────────────────────────
 
