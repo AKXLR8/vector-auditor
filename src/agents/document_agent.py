@@ -289,6 +289,22 @@ class DocumentAgent:
     async def analyze_document(self, user_id: str, question: Optional[str], document_ids: Optional[list[str]],
                                 max_citations: Optional[int] = None) -> DocumentAnalysis:
         req_doc_ids = document_ids or []
+        if question and re.match(r"^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|sup|howdy|yo)\b", question.strip(), re.I):
+            return DocumentAnalysis(
+                summary="Hi there! Please select documents to analyze, or ask me a question about your documents.",
+                key_findings=[], methodology="",
+                research_gaps=[], contradictions=[], open_questions=[],
+                limitations="", confidence="high",
+                citations=[], documents_analyzed=[],
+            )
+        if not req_doc_ids:
+            return DocumentAnalysis(
+                summary="Please select one or more documents to analyze.",
+                key_findings=[], methodology="",
+                research_gaps=[], contradictions=[], open_questions=[],
+                limitations="No documents selected.", confidence="low",
+                citations=[], documents_analyzed=[],
+            )
         if len(req_doc_ids) > 1:
             per_doc = max(3, 12 // len(req_doc_ids))
             citations: list[Citation] = []
