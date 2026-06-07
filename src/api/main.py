@@ -698,12 +698,25 @@ def create_app() -> FastAPI:
             get_shutdown_manager().install_signal_handlers(loop)
         except Exception as e:
             logger.debug("signal handler install skipped: %s", e)
-        # Initialize DB engine from DATABASE_URL in environment
+
+        from ..database.session import init_engine
         try:
-            from ..database.session import init_engine
             await init_engine()
+            logger.info("DB engine initialized")
         except Exception as e:
             logger.warning("DB init failed: %s — running with in-memory fallback", e)
+
+        from ..vectorstore.Qdrant import get_vector_store
+        try:
+            get_vector_store()
+            logger.info("Vector store ready (model loaded)")
+        except Exception as e:
+            logger.warning("Vector store init failed: %s", e)
+
+        from ..job_queue import get_worker
+        set_upload_processor()
+        await get_worker().start()
+        logger.info("Upload processor registered and worker started")
 
     return app
 

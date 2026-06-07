@@ -1,12 +1,9 @@
 """Qdrant vector store with user-isolated collections."""
-import asyncio
 import logging
 import os
 import uuid
 from pathlib import Path
 from typing import Optional
-
-import asyncio
 
 logger = logging.getLogger("rga_auditor.qdrant")
 
@@ -104,8 +101,14 @@ class VectorStore:
         ]
 
         t2 = time.monotonic()
-        await run_sync(self.client.upsert, collection_name=self.collection_name, points=points, wait=True)
-        logger.info("VectorStore.add_document: upserted %d points in %.2fs (total %.2fs)", len(points), time.monotonic() - t2, time.monotonic() - t0)
+        BATCH_SIZE = 100
+        total = len(points)
+        for i in range(0, total, BATCH_SIZE):
+            batch = points[i:i+BATCH_SIZE]
+            await run_sync(self.client.upsert, collection_name=self.collection_name, points=batch, wait=True)
+            logger.info("VectorStore.add_document: upserted batch %d/%d (%d points) in %.2fs",
+                         i//BATCH_SIZE + 1, (total-1)//BATCH_SIZE + 1, len(batch), time.monotonic() - t2)
+        logger.info("VectorStore.add_document: completed %d points in %.2fs (total %.2fs)", total, time.monotonic() - t2, time.monotonic() - t0)
         return len(chunks)
 
     async def search(
