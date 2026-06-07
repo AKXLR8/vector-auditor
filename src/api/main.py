@@ -184,7 +184,12 @@ def _user_response(u: dict) -> UserResponse:
     )
 
 
-def _doc_response(d: dict) -> DocumentResponse:
+def _doc_response(d: dict, request: Optional[Request] = None) -> DocumentResponse:
+    file_url = None
+    if request:
+        file_url = str(request.url_for("serve_file", doc_id=d["id"]))
+    elif d.get("cloudinary_url"):
+        file_url = d["cloudinary_url"]
     return DocumentResponse(
         id=d["id"],
         document_id=d.get("id"),
@@ -193,6 +198,7 @@ def _doc_response(d: dict) -> DocumentResponse:
         has_pii=d.get("has_pii", False),
         sha256=d.get("sha256") or "",
         cloudinary_url=d.get("cloudinary_url"),
+        file_url=file_url,
         uploaded_by=d.get("uploaded_by", ""),
         created_at=d.get("created_at"),
     )
@@ -500,16 +506,16 @@ def create_app() -> FastAPI:
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
             docs = await list_documents(s, user_id=user["id"])
-        return [_doc_response(d) for d in docs]
+        return [_doc_response(d, request) for d in docs]
 
     @app.get("/documents/{doc_id}", response_model=DocumentResponse)
-    async def get_doc(doc_id: str, user=Depends(current_user)):
+    async def get_doc(doc_id: str, request: Request, user=Depends(current_user)):
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
             d = await get_document(s, doc_id)
         if not d or d.get("uploaded_by") != user["id"]:
             raise HTTPException(status_code=404, detail="not found")
-        return _doc_response(d)
+        return _doc_response(d, request)
 
     @app.delete("/documents/{doc_id}", status_code=204)
     async def del_doc(doc_id: str, user=Depends(current_user)):
@@ -548,7 +554,11 @@ def create_app() -> FastAPI:
         safe = d.get("filename", "document")
         local = UPLOAD_DIR / f"{doc_id}_{safe}"
         if not local.exists():
-            raise HTTPException(status_code=404, detail="file not found on server")
+            alt = sorted(UPLOAD_DIR.glob(f"*_{safe}"))
+            if alt:
+                local = alt[0]
+            else:
+                raise HTTPException(status_code=404, detail="file not found on server")
         return FileResponse(local, media_type="application/pdf", filename=safe)
 
     # ── Sessions ──────────────────────────────────────────────────────────

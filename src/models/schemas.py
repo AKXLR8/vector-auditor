@@ -164,6 +164,7 @@ class DocumentResponse(BaseModel):
     has_pii: bool = False
     sha256: str = ""
     cloudinary_url: Optional[str] = None
+    file_url: Optional[str] = None
     uploaded_by: str
     created_at: Optional[str] = None
 
