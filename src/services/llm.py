@@ -1,4 +1,4 @@
-"""LLM client for Inception AI (OpenAI-compatible)."""
+"""LLM client for OpenAI-compatible APIs."""
 import json
 import logging
 import os
@@ -10,8 +10,8 @@ from .secrets import get_secret
 
 logger = logging.getLogger("rga_auditor.llm")
 
-DEFAULT_BASE_URL = "https://api.inception.ai/v1"
-DEFAULT_MODEL = "mercury-2"
+DEFAULT_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("INCEPTION_BASE_URL") or "https://api.inception.ai/v1"
+DEFAULT_MODEL = os.getenv("LLM_MODEL") or os.getenv("MERCURY_MODEL") or "mercury-2"
 
 
 class LLMError(RuntimeError):
@@ -27,12 +27,14 @@ class LLM:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> None:
-        api_key = api_key or get_secret("INCEPTION_API_KEY") or os.getenv("INCEPTION_API_KEY")
+        api_key = api_key or get_secret("LLM_API_KEY") or get_secret("INCEPTION_API_KEY") or os.getenv("LLM_API_KEY") or os.getenv("INCEPTION_API_KEY")
         if not api_key:
-            raise RuntimeError("INCEPTION_API_KEY is required — set it in .env or AWS Secrets Manager")
+            raise RuntimeError(
+                "No LLM API key found. Set LLM_API_KEY or INCEPTION_API_KEY in .env"
+            )
         self.api_key = api_key
-        self.base_url = (base_url or os.getenv("INCEPTION_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
-        self.model = model or os.getenv("MERCURY_MODEL", DEFAULT_MODEL)
+        self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
+        self.model = model or DEFAULT_MODEL
         self.max_tokens = int(max_tokens) if max_tokens is not None else int(os.getenv("LLM_MAX_TOKENS", "2048"))
         self.temperature = float(temperature if temperature is not None else os.getenv("LLM_TEMPERATURE", "0"))
 

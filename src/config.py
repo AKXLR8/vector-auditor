@@ -27,12 +27,16 @@ class Settings(BaseSettings):
     database_url: Optional[str] = Field(default=None, alias="DATABASE_URL")
 
     # ── LLM ───────────────────────────────────────────────
-    mercury_model: str = Field(default="mercury-2", alias="MERCURY_MODEL")
-    llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")
-    llm_temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
+    llm_api_key: Optional[str] = Field(default=None, alias="LLM_API_KEY")
+    llm_base_url: Optional[str] = Field(default=None, alias="LLM_BASE_URL")
+    llm_model: str = Field(default="gpt-4o-mini", alias="LLM_MODEL")
+    inception_api_key: Optional[str] = Field(default=None, alias="INCEPTION_API_KEY")
     inception_base_url: str = Field(
         default="https://api.inception.ai/v1", alias="INCEPTION_BASE_URL"
     )
+    mercury_model: str = Field(default="mercury-2", alias="MERCURY_MODEL")
+    llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")
+    llm_temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
     skip_llm_prewarm: bool = Field(default=False, alias="SKIP_LLM_PREWARM")
 
     # ── Cloudinary ────────────────────────────────────────
