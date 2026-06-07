@@ -89,6 +89,7 @@ class DocumentAgent:
                     source=r.get("filename", ""),
                     location=location,
                     page=r.get("page"),
+                    document_id=r.get("document_id"),
                 )
             )
         return self._truncate_citations(citations)
@@ -312,7 +313,14 @@ class DocumentAgent:
             )
         ctx = "\n\n".join(f"[{i+1}] (source={c.source}) {c.quote}" for i, c in enumerate(citations))
         focus = question or "Provide a structured analysis comparing all documents."
-        is_multi = len({c.source for c in citations}) > 1
+        def _norm(s: str) -> str:
+            return re.sub(r"[\s_-]+", "_", s.strip().lower())
+        seen_docs: dict[str, str] = {}
+        for c in citations:
+            key = _norm(c.source)
+            seen_docs.setdefault(key, c.source)
+        doc_names = sorted(seen_docs.values())
+        is_multi = len(doc_names) > 1
         structure_instruction = (
             "summary, key_findings (array of 4-7), methodology, "
             "research_gaps (array of 2-4), contradictions (array), open_questions (array of 2-3), "
@@ -324,10 +332,11 @@ class DocumentAgent:
                 "complementary_insights), per_document_summary (object keyed by filename with short summary)"
             )
         docs_analyzed = sorted({c.source for c in citations})
+        doc_ids_with_data = sorted({c.document_id for c in citations if c.document_id})
         prompt = (
             f"Based on the following document excerpts, produce a detailed JSON object with keys: "
             f"{structure_instruction}."
-            f"\n\nDocuments analyzed: {', '.join(docs_analyzed)}"
+            f"\n\nDocuments analyzed ({len(doc_names)}): {', '.join(doc_names)}"
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
             f"Return ONLY a valid JSON object, no commentary."
         )
@@ -354,5 +363,5 @@ class DocumentAgent:
             limitations=data.get("limitations", ""),
             confidence=data.get("confidence", "moderate"),
             citations=citations,
-            documents_analyzed=docs_analyzed,
+            documents_analyzed=doc_ids_with_data or docs_analyzed,
         )

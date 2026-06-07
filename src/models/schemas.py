@@ -102,6 +102,7 @@ class Citation(BaseModel):
     source: str
     location: str
     page: Optional[int] = None
+    document_id: Optional[str] = None
 
 
 class QueryRequest(BaseModel):
