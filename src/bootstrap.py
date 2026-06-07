@@ -62,7 +62,6 @@ async def bootstrap_app() -> dict:
     # 2. cache
     step("cache", get_cache)
 
-    # 3. vector store (loads embedding model — slow first time)
     step("vector_store", get_vector_store)
 
     # 4. guardrails + pii (best-effort)

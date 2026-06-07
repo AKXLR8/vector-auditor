@@ -36,24 +36,21 @@ class VectorStore:
         self.embedding_dim = 384
         self._model: Optional[SentenceTransformer] = None
         self._create_collection()
-
-    @property
-    def model(self):
-        if self._model is None:
-            self._load_model()
-        return self._model
+        self._load_model()
 
     def _load_model(self) -> None:
+        import time
+        t0 = time.time()
         from sentence_transformers import SentenceTransformer
         pkl = MODELS_DIR / "embedding_model.pkl"
         if pkl.exists():
             import joblib
             self._model = joblib.load(str(pkl))
-            logger.info("Loaded embedding model from %s", pkl)
+            logger.info("VectorStore: loaded embedding model from %s in %.2fs", pkl, time.time() - t0)
         else:
-            logger.info("Downloading embedding model...")
+            logger.info("VectorStore: pickle not found at %s — downloading all-MiniLM-L6-v2", pkl)
             self._model = SentenceTransformer("all-MiniLM-L6-v2")
-        logger.info("Embedding model ready")
+            logger.info("VectorStore: model downloaded in %.2fs", time.time() - t0)
 
     def _create_collection(self) -> None:
         from qdrant_client.http import models
@@ -75,19 +72,28 @@ class VectorStore:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         from .async_worker import run_sync
-        return asyncio.get_event_loop().run_until_complete(run_sync(self.model.encode, texts))
+        return asyncio.get_event_loop().run_until_complete(run_sync(self._model.encode, texts))
 
     async def add_document(self, user_id: str, document_id: str, filename: str, text: str) -> int:
+        import time
+        t0 = time.time()
         from qdrant_client.http import models
         chunks = self.splitter.split_text(text)
+        logger.info("VectorStore.add_document: chunked %d chars → %d chunks in %.2fs", len(text), len(chunks), time.time() - t0)
+
         if not chunks:
+            logger.warning("VectorStore.add_document: no chunks for %s/%s", user_id, document_id)
             return 0
-        # batch encode
+
+        t1 = time.time()
         from .async_worker import run_sync
-        vectors = await run_sync(self.model.encode, chunks)
+        vectors = await run_sync(self._model.encode, chunks)
         if hasattr(vectors, "tolist"):
             vectors = vectors.tolist()
+        logger.info("VectorStore.add_document: encoded %d chunks in %.2fs", len(chunks), time.time() - t1)
+
         gc.collect()
+
         points = [
             models.PointStruct(
                 id=int(hashlib.md5(f"{document_id}:{i}".encode()).hexdigest()[:16], 16),
@@ -102,7 +108,10 @@ class VectorStore:
             )
             for i, (chunk, v) in enumerate(zip(chunks, vectors))
         ]
-        self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+
+        t2 = time.time()
+        await run_sync(self.client.upsert, collection_name=self.collection_name, points=points, wait=True)
+        logger.info("VectorStore.add_document: upserted %d points in %.2fs (total %.2fs)", len(points), time.time() - t2, time.time() - t0)
         return len(chunks)
 
     def search(
@@ -113,7 +122,7 @@ class VectorStore:
         document_ids: Optional[list[str]] = None,
     ) -> list[dict]:
         from .async_worker import run_sync
-        vec = run_sync(self.model.encode, [query])
+        vec = run_sync(self._model.encode, [query])
         if hasattr(vec, "tolist"):
             vec = vec.tolist()
         from qdrant_client.http import models

@@ -725,25 +725,31 @@ def set_upload_processor() -> None:
     )
 
     async def _process(record) -> None:
+        import time
+        _t0 = time.time()
+        logger.info("UPLOAD: starting processing for %s (file=%s)", record.id, record.filename)
         try:
-            # Stage: extracting
             await get_worker().queue.update(record.id, stage="extracting", progress=20)
             content = Path(record.content_path).read_bytes()
+            _t1 = time.time()
             text = parse_document(record.filename, content)
-            # Stage: chunking + embedding + indexing happen in vector store
+            logger.info("UPLOAD: parsed %s → %d chars in %.2fs", record.filename, len(text), time.time() - _t1)
             await get_worker().queue.update(record.id, stage="chunking", progress=40)
             await get_worker().queue.update(record.id, stage="embedding", progress=60)
-            n_chunks = get_vector_store().add_document(
+            _t2 = time.time()
+            n_chunks = await get_vector_store().add_document(
                 user_id=record.user_id, document_id=record.document_id, filename=record.filename, text=text
             )
+            logger.info("UPLOAD: indexed %d chunks in %.2fs (total %.2fs)", n_chunks, time.time() - _t2, time.time() - _t0)
             await get_worker().queue.update(record.id, stage="indexing", progress=90)
             sf = get_session_factory()
             if sf is not None:
                 async with sf() as s:
                     await update_document(s, record.document_id, status="success")
             get_metrics().uploads_total.labels(status="ok").inc()
+            logger.info("UPLOAD: completed %s in %.2fs", record.id, time.time() - _t0)
         except Exception as e:
-            logger.exception("upload processing failed for %s", record.id)
+            logger.exception("UPLOAD: failed for %s after %.2fs: %s", record.id, time.time() - _t0, e)
             get_metrics().uploads_total.labels(status="error").inc()
             sf = get_session_factory()
             if sf is not None:
