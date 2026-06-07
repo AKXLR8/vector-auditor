@@ -284,23 +284,48 @@ class DocumentAgent:
 
     async def analyze_document(self, user_id: str, question: Optional[str], document_ids: Optional[list[str]],
                                 max_citations: Optional[int] = None) -> DocumentAnalysis:
-        citations = await self._retrieve(user_id, question or "key findings and methodology", document_ids,
-                                          min(self.retrieve_k * 2, 20))
+        doc_ids = document_ids or []
+        # Retrieve fairly from each document
+        if len(doc_ids) > 1:
+            per_doc = max(3, 12 // len(doc_ids))
+            citations: list[Citation] = []
+            for did in doc_ids:
+                part = await self._retrieve(user_id, question or "key findings and methodology", [did], per_doc)
+                citations.extend(part)
+            if citations:
+                dedup = {}
+                for c in citations:
+                    dedup.setdefault(c.quote, c)
+                citations = list(dedup.values())[:max_citations or 20]
+        else:
+            citations = await self._retrieve(user_id, question or "key findings and methodology", doc_ids or None,
+                                              min(self.retrieve_k * 2, 20))
         citations = self._truncate_citations(citations)
         if not citations:
             return DocumentAnalysis(
                 summary="No content found.", key_findings=[], methodology="",
                 research_gaps=[], contradictions=[], open_questions=[],
                 limitations="No documents accessible.", confidence="low",
-                citations=[], documents_analyzed=document_ids or [],
+                citations=[], documents_analyzed=doc_ids,
             )
-        ctx = "\n\n".join(f"[{i+1}] {c.quote}" for i, c in enumerate(citations))
-        focus = question or "Provide a structured analysis."
+        ctx = "\n\n".join(f"[{i+1}] (source={c.source}) {c.quote}" for i, c in enumerate(citations))
+        focus = question or "Provide a structured analysis comparing all documents."
+        is_multi = len(doc_ids) > 1
+        structure_instruction = (
+            "summary, key_findings (array of 3-5), methodology, "
+            "research_gaps (array of 2-4), contradictions (array), open_questions (array of 2-3), "
+            "limitations, confidence ('high'|'moderate'|'low')"
+        )
+        if is_multi:
+            structure_instruction += (
+                ", cross_document_comparison (object with keys: common_themes, differences, "
+                "complementary_insights), per_document_summary (object keyed by filename with short summary)"
+            )
         prompt = (
             f"Based on the following document excerpts, produce a JSON object with keys: "
-            f"summary, key_findings (array of 3-5), methodology, research_gaps (array of 2-4), "
-            f"contradictions (array), open_questions (array of 2-3), limitations, confidence "
-            f"('high'|'moderate'|'low').\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
+            f"{structure_instruction}."
+            f"\n\nDocuments analyzed: {', '.join({c.source for c in citations})}"
+            f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
             f"Return ONLY a valid JSON object, no commentary."
         )
         raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.")
@@ -325,5 +350,5 @@ class DocumentAgent:
             limitations=data.get("limitations", ""),
             confidence=data.get("confidence", "moderate"),
             citations=citations,
-            documents_analyzed=document_ids or list({c.source for c in citations}),
+            documents_analyzed=doc_ids or list({c.source for c in citations}),
         )

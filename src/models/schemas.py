@@ -132,6 +132,12 @@ class AnalyzeRequest(BaseModel):
     max_citations: Optional[int] = Field(default=None, ge=1, le=100)
 
 
+class CrossDocComparison(BaseModel):
+    common_themes: list[str] = []
+    differences: list[str] = []
+    complementary_insights: list[str] = []
+
+
 class DocumentAnalysis(BaseModel):
     summary: str
     key_findings: list[str] = []
@@ -143,6 +149,8 @@ class DocumentAnalysis(BaseModel):
     confidence: str = "moderate"  # "high" | "moderate" | "low"
     citations: list[Citation] = []
     documents_analyzed: list[str] = []
+    cross_document_comparison: Optional[CrossDocComparison] = None
+    per_document_summary: Optional[dict[str, str]] = None
 
 
 # ── Documents ──────────────────────────────────────────────────────────────

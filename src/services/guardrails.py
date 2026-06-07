@@ -71,18 +71,10 @@ class Guardrails:
         if pii_entities:
             types = list({e["entity_type"] for e in pii_entities})
             logger.info("PII detected in input: %s", types)
-        if self._rails is not None:
-            try:
-                safe_text = self.anonymize(text) if _PII_ENABLED else text
-                response = await self._rails.generate_async(messages=[{"role": "user", "content": safe_text}])
-                content = (response.get("content") or "").strip()
-                if content and content != safe_text:
-                    return False, content, pii_entities
-                return True, None, pii_entities
-            except Exception as e:
-                logger.warning("guardrails check failed: %s", e)
         allowed, reason = self._fallback_check(text)
-        return allowed, reason, pii_entities
+        if not allowed:
+            return False, reason, pii_entities
+        return True, None, pii_entities
 
     def _fallback_check(self, text: str) -> tuple[bool, Optional[str]]:
         t = text.lower()
