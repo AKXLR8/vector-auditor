@@ -146,7 +146,18 @@ class DocumentAgent:
         except json.JSONDecodeError:
             return []
 
+    @staticmethod
+    def _is_greeting(text: str) -> bool:
+        return bool(re.match(r"^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|sup|howdy|yo)\b", text.strip(), re.I))
+
     async def query(self, user_id: str, req: QueryRequest) -> QueryResponse:
+        if self._is_greeting(req.question):
+            return QueryResponse(
+                answer="Hi there! What would you like to know about your documents?",
+                citations=[], reasoning_path=[], tokens_used=0, cost_usd=0.0,
+                query_id=uuid.uuid4().hex, timestamp=datetime.utcnow().isoformat() + "Z",
+                mode=req.mode,
+            )
         t0 = time.time()
         k = self._per_doc_caps(req.max_citations) * 2
         all_citations: list[Citation] = []
@@ -213,6 +224,11 @@ class DocumentAgent:
         """
         query_id = uuid.uuid4().hex
         timestamp = datetime.utcnow().isoformat() + "Z"
+        if self._is_greeting(req.question):
+            yield {"type": "citations", "citations": [], "query_id": query_id, "reasoning_path": []}
+            yield {"type": "token", "content": "Hi there! What would you like to know about your documents?"}
+            yield {"type": "done", "tokens_used": 0, "cost_usd": 0.0, "mode": req.mode.value, "query_id": query_id, "timestamp": timestamp}
+            return
         try:
             k = self.retrieve_k
             all_citations: list[Citation] = []
