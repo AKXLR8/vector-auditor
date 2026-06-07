@@ -10,6 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
+_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
+if _PATH.exists():
+    load_dotenv(_PATH, override=False)
+
 import httpx
 from fastapi import (
     Depends,
