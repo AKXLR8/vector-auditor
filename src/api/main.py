@@ -185,11 +185,13 @@ def _user_response(u: dict) -> UserResponse:
 
 
 def _doc_response(d: dict, request: Optional[Request] = None) -> DocumentResponse:
+    cu = d.get("cloudinary_url")
     file_url = None
     if request:
         file_url = str(request.url_for("serve_file", doc_id=d["id"]))
-    elif d.get("cloudinary_url"):
-        file_url = d["cloudinary_url"]
+    elif cu:
+        file_url = cu
+    # If cloudinary_url is missing, fall back to local file_url so frontend always gets a working link
     return DocumentResponse(
         id=d["id"],
         document_id=d.get("id"),
@@ -197,7 +199,7 @@ def _doc_response(d: dict, request: Optional[Request] = None) -> DocumentRespons
         status=d.get("status", "processing"),
         has_pii=d.get("has_pii", False),
         sha256=d.get("sha256") or "",
-        cloudinary_url=d.get("cloudinary_url"),
+        cloudinary_url=cu or file_url,
         file_url=file_url,
         uploaded_by=d.get("uploaded_by", ""),
         created_at=d.get("created_at"),
