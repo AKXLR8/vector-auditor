@@ -134,8 +134,8 @@ class VectorStore:
         flt = models.Filter(must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))])
         if document_ids:
             flt.must.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
-        results = await run_sync(
-            self.client.search, collection_name=self.collection_name, query_vector=vec[0], limit=k, query_filter=flt
+        resp = await run_sync(
+            self.client.query_points, collection_name=self.collection_name, query=vec[0], limit=k, query_filter=flt
         )
         return [
             {
@@ -146,7 +146,7 @@ class VectorStore:
                 "chunk_index": r.payload.get("chunk_index"),
                 "text": r.payload.get("text", ""),
             }
-            for r in results
+            for r in resp.points
         ]
 
     def delete_document(self, user_id: str, document_id: str) -> None:
