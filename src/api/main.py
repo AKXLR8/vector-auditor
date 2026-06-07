@@ -28,7 +28,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -184,14 +184,7 @@ def _user_response(u: dict) -> UserResponse:
     )
 
 
-def _doc_response(d: dict, request: Optional[Request] = None) -> DocumentResponse:
-    cu = d.get("cloudinary_url")
-    file_url = None
-    if request:
-        file_url = str(request.url_for("serve_file", doc_id=d["id"]))
-    elif cu:
-        file_url = cu
-    # If cloudinary_url is missing, fall back to local file_url so frontend always gets a working link
+def _doc_response(d: dict) -> DocumentResponse:
     return DocumentResponse(
         id=d["id"],
         document_id=d.get("id"),
@@ -199,8 +192,7 @@ def _doc_response(d: dict, request: Optional[Request] = None) -> DocumentRespons
         status=d.get("status", "processing"),
         has_pii=d.get("has_pii", False),
         sha256=d.get("sha256") or "",
-        cloudinary_url=cu or file_url,
-        file_url=file_url,
+        cloudinary_url=d.get("cloudinary_url"),
         uploaded_by=d.get("uploaded_by", ""),
         created_at=d.get("created_at"),
     )
@@ -397,15 +389,6 @@ def create_app() -> FastAPI:
 
     # ── Query ─────────────────────────────────────────────────────────────
 
-    def _enrich_citations(citations: list[Citation], r: Request) -> list[Citation]:
-        out: list[Citation] = []
-        for c in citations:
-            d = c.model_dump()
-            if c.document_id and not c.file_url:
-                d["file_url"] = str(r.url_for("serve_file", doc_id=c.document_id))
-            out.append(Citation(**d))
-        return out
-
     @app.post("/query", response_model=QueryResponse)
     @limiter.limit("20/minute")
     async def query(request: Request, body: QueryRequest, user=Depends(current_user)):
@@ -415,9 +398,7 @@ def create_app() -> FastAPI:
             logger.info("PII entities in query: %s", [{k: v for k, v in e.items() if k != "text"} for e in pii])
         if not allowed:
             raise HTTPException(status_code=400, detail=refusal or "blocked by guardrails")
-        resp = await agent.query(user["id"], body)
-        resp.citations = _enrich_citations(resp.citations, request)
-        return resp
+        return await agent.query(user["id"], body)
 
     @app.post("/query/stream")
     @limiter.limit("20/minute")
@@ -432,13 +413,6 @@ def create_app() -> FastAPI:
         async def event_gen():
             try:
                 async for event in agent.stream_query(user["id"], body):
-                    if event.get("type") == "citations" and event.get("citations"):
-                        enriched = []
-                        for c in event["citations"]:
-                            if c.get("document_id") and not c.get("file_url"):
-                                c["file_url"] = str(request.url_for("serve_file", doc_id=c["document_id"]))
-                            enriched.append(c)
-                        event["citations"] = enriched
                     yield f"data: {json.dumps(event)}\n\n"
             except Exception as e:
                 err = json.dumps({"type": "error", "detail": str(e)[:500]})
@@ -453,9 +427,7 @@ def create_app() -> FastAPI:
         from ..services.llm import LLMError
         agent = _get_agent()
         try:
-            resp = await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
-            resp.citations = _enrich_citations(resp.citations, request)
-            return resp
+            return await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
         except LLMError as e:
             raise HTTPException(status_code=502, detail=str(e))
 
@@ -473,7 +445,7 @@ def create_app() -> FastAPI:
             safe = sanitize_filename(f.filename) or "document"
             doc_id = uuid.uuid4().hex
             upload_id = uuid.uuid4().hex
-            target = UPLOAD_DIR / f"{doc_id}_{safe}"
+            target = UPLOAD_DIR / f"{upload_id}_{safe}"
             target.write_bytes(content)
             digest = hashlib.sha256(content).hexdigest()
 
@@ -528,16 +500,16 @@ def create_app() -> FastAPI:
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
             docs = await list_documents(s, user_id=user["id"])
-        return [_doc_response(d, request) for d in docs]
+        return [_doc_response(d) for d in docs]
 
     @app.get("/documents/{doc_id}", response_model=DocumentResponse)
-    async def get_doc(doc_id: str, request: Request, user=Depends(current_user)):
+    async def get_doc(doc_id: str, user=Depends(current_user)):
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
             d = await get_document(s, doc_id)
         if not d or d.get("uploaded_by") != user["id"]:
             raise HTTPException(status_code=404, detail="not found")
-        return _doc_response(d, request)
+        return _doc_response(d)
 
     @app.delete("/documents/{doc_id}", status_code=204)
     async def del_doc(doc_id: str, user=Depends(current_user)):
@@ -553,6 +525,38 @@ def create_app() -> FastAPI:
             logger.warning("qdrant delete failed: %s", e)
         return Response(status_code=204)
 
+    @app.post("/documents/backfill")
+    async def backfill_documents(request: Request, user=Depends(current_user)):
+        sf = get_session_factory()
+        async with _maybe_session(sf) as s:
+            docs = await list_documents(s, user_id=user["id"])
+        updated = 0
+        for doc in docs:
+            if doc.get("cloudinary_url"):
+                continue
+            safe = doc.get("filename", "document")
+            doc_id = doc["id"]
+            local = UPLOAD_DIR / f"{doc_id}_{safe}"
+            if not local.exists():
+                alt = sorted(UPLOAD_DIR.glob(f"*_{safe}"))
+                if alt:
+                    local = alt[0]
+                else:
+                    continue
+            content = local.read_bytes()
+            try:
+                cli = get_cloudinary()
+                if cli:
+                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}", resource_type="auto")
+                    cu = res.get("secure_url") or res.get("url")
+                    if cu:
+                        async with _maybe_session(sf) as s:
+                            await update_document(s, doc_id, cloudinary_url=cu)
+                        updated += 1
+            except Exception as e:
+                logger.warning("backfill failed for %s: %s", doc_id, e)
+        return {"backfilled": updated, "total": len(docs)}
+
     @app.get("/uploads/{upload_id}", response_model=UploadStatusResponse)
     async def upload_status(upload_id: str, user=Depends(current_user)):
         record = await get_worker().queue.get(upload_id) if hasattr(get_worker(), "queue") else None
@@ -561,27 +565,6 @@ def create_app() -> FastAPI:
         if record.user_id != user["id"]:
             raise HTTPException(status_code=404, detail="not found")
         return UploadStatusResponse(**record.to_status_dict())
-
-    @app.get("/files/{doc_id}")
-    async def serve_file(doc_id: str, user=Depends(current_user)):
-        sf = get_session_factory()
-        async with _maybe_session(sf) as s:
-            d = await get_document(s, doc_id)
-        if not d:
-            raise HTTPException(status_code=404, detail="document not found")
-        if d.get("uploaded_by") != user["id"]:
-            raise HTTPException(status_code=404, detail="not found")
-        if d.get("cloudinary_url"):
-            return RedirectResponse(url=d["cloudinary_url"])
-        safe = d.get("filename", "document")
-        local = UPLOAD_DIR / f"{doc_id}_{safe}"
-        if not local.exists():
-            alt = sorted(UPLOAD_DIR.glob(f"*_{safe}"))
-            if alt:
-                local = alt[0]
-            else:
-                raise HTTPException(status_code=404, detail="file not found on server")
-        return FileResponse(local, media_type="application/pdf", filename=safe)
 
     # ── Sessions ──────────────────────────────────────────────────────────
 
