@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="gpt-4o-mini", alias="LLM_MODEL")
     inception_api_key: Optional[str] = Field(default=None, alias="INCEPTION_API_KEY")
     inception_base_url: str = Field(
-        default="https://api.inception.ai/v1", alias="INCEPTION_BASE_URL"
+        default="https://api.inceptionlabs.ai/v1", alias="INCEPTION_BASE_URL"
     )
     mercury_model: str = Field(default="mercury-2", alias="MERCURY_MODEL")
     llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")

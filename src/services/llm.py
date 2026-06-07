@@ -10,7 +10,7 @@ from .secrets import get_secret
 
 logger = logging.getLogger("rga_auditor.llm")
 
-DEFAULT_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("INCEPTION_BASE_URL") or "https://api.inception.ai/v1"
+DEFAULT_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("INCEPTION_BASE_URL") or "https://api.inceptionlabs.ai/v1"
 DEFAULT_MODEL = os.getenv("LLM_MODEL") or os.getenv("MERCURY_MODEL") or "mercury-2"
 
 
