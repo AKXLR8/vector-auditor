@@ -27,22 +27,94 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 - **Feedback loop** — thumbs up/down per query
 - **Observability** — JSON structured logs, Prometheus `/metrics`, health `/health`, readiness `/readyz`
 
-## Architecture
 
-```
-┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
-│  FastAPI     │────▶│  DocumentAgent   │────▶│  LLM (Incept)│
-│  36 routes   │     │  (retrieve→gen→  │     │  + circuit   │
-│  + middleware│     │   verify→gaps)   │     │  breaker     │
-└──────┬───────┘     └────────┬─────────┘     └──────────────┘
-       │                      │
-       ▼                      ▼
-┌──────────┐     ┌──────────────────────┐
-│ Postgres │     │  Qdrant + all-MiniLM │
-│ + Redis  │     │  (user-isolated)     │
-│ fallback │     │  + circuit breaker   │
-└──────────┘     └──────────────────────┘
-```
+## Architecture
+---
+config:
+  layout: elk
+  theme: neo-dark
+---
+graph TB
+  subgraph Clients
+    User["User Browser"]
+    FE["Frontend (separate repo)"]
+  end
+
+  subgraph "HF Spaces (Docker, 2 workers)"
+    API["FastAPI App<br/>src/api/main.py"]
+    MW["Middleware<br/>Logging · CORS · Auth"]
+    Auth["Auth Service<br/>JWT · GitHub OAuth"]
+    Rate["Rate Limiter<br/>slowapi"]
+  end
+
+  subgraph "Document Processing Pipeline"
+    Parser["Document Parser<br/>MarkItDown + pdfplumber"]
+    PII["PII Detection<br/>presidio-analyzer"]
+    Cloud["Cloudinary<br/>raw file storage"]
+    Chunker["Text Chunker<br/>RecursiveCharacterTextSplitter<br/>1000 chars · 50 overlap"]
+  end
+
+  subgraph "Vector Store"
+    Qdrant["Qdrant Cloud<br/>Vector DB"]
+    Embedder["Embedding Model<br/>all-MiniLM-L6-v2"]
+    CB_Q["Circuit Breaker<br/>search: 5/30s · index: 3/60s"]
+  end
+
+  subgraph "LLM / RAG"
+    Agent["Document Agent<br/>src/agents/document_agent.py"]
+    LLM["LLM Service<br/>Mercury-2 via Inception Labs"]
+    CB_L["Circuit Breaker<br/>5 failures / 30s recovery"]
+    Retry["Retry w/ Backoff<br/>0.5s → 1s → 2s"]
+    Guard["Guardrails<br/>NeMo Guardrails"]
+    Degrade["Graceful Degradation<br/>context-only fallback"]
+  end
+
+  subgraph "Infrastructure"
+    PG[("PostgreSQL<br/>(Qdrant Cloud or in-memory fallback)")]
+    Redis[("Redis<br/>(session cache)")]
+    JobQ["Job Queue<br/>max_concurrent=5"]
+    Metrics["Prometheus Metrics"]
+    Shutdown["Graceful Shutdown"]
+    TokenCounter["Token Counter"]
+  end
+
+  %% Connections
+  User --> FE --> API
+  API --> MW --> Auth
+  MW --> Rate
+
+  API --> JobQ --> Parser --> PII --> Cloud
+  Parser --> Chunker --> Qdrant
+  Qdrant --> Embedder
+  Qdrant --> CB_Q
+
+  API --> Agent
+  Agent --> Qdrant
+  Agent --> LLM
+  LLM --> CB_L --> Degrade
+  LLM --> Retry
+  LLM --> Guard
+
+  API --> PG
+  API --> Redis
+  API --> Metrics
+  API --> Shutdown
+  API --> TokenCounter
+
+  %% Color Styling
+  classDef client fill:#0f172a,stroke:#38bdf8,color:#f0f9ff
+  classDef api fill:#0a2647,stroke:#60a5fa,color:#e0f2fe
+  classDef process fill:#111827,stroke:#2dd4bf,color:#f0fdfa
+  classDef vector fill:#22092C,stroke:#f59e0b,color:#fff7ed
+  classDef llm fill:#1e1b4b,stroke:#a78bfa,color:#f5f3ff
+  classDef infra fill:#1c1917,stroke:#d4d4d8,color:#f5f5f4
+
+  class User,FE client
+  class API,MW,Auth,Rate api
+  class Parser,PII,Cloud,Chunker process
+  class Qdrant,Embedder,CB_Q vector
+  class Agent,LLM,CB_L,Retry,Guard,Degrade llm
+  class PG,Redis,JobQ,Metrics,Shutdown,TokenCounter infra
 
 ## Tech Stack
 
