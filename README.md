@@ -1,3 +1,12 @@
+---
+title: Vector Auditor
+emoji: 📊
+colorFrom: indigo
+colorTo: gray
+sdk: docker
+pinned: false
+---
+
 # RAG Auditor
 
 Production-grade document Q&A system. FastAPI + lite RAG agent (no LangChain runtime) + Qdrant + Postgres + Redis.
@@ -38,10 +47,8 @@ python run.py
 
 ```powershell
 alembic upgrade head
-gunicorn src.api.main:app --config gunicorn_conf.py --bind 0.0.0.0:%PORT%
+uvicorn src.api.main:app --host 0.0.0.0 --port 7860 --workers 2
 ```
-
-`gunicorn_conf.py` reads `$PORT` (defaults to 8000), single uvicorn worker + multi-thread, graceful timeout 30s.
 
 ## Endpoints (28 spec + 3 ops)
 
@@ -155,24 +162,25 @@ alembic/versions/     # 001_initial → 002_upload_jobs → 003_user_enhancement
 
 | Target | How |
 |--------|-----|
-| **Hugging Face Spaces** | `DEPLOY_HF_SPACES.md` (5 steps) — port 7860, Dockerfile, entrypoint runs `alembic upgrade head` then `gunicorn` |
-| **Railway** | `railway.toml` (NIXPACKS) — `releaseCommand: alembic upgrade head`, `startCommand: gunicorn ...` |
-| **Render** | `render.yaml` ready |
-| **Heroku** | `Procfile` ready (`web: gunicorn ...`, `release: alembic upgrade head`) |
+| **Hugging Face Spaces** | `DEPLOY_HF_SPACES.md` (5 steps) — port 7860, Dockerfile, entrypoint runs `alembic upgrade head` then `uvicorn` |
+| **GitHub** | `git push origin main` |
 
-## Production checklist (from PRD)
+## Production checklist
 
 - [x] FastAPI + Pydantic validation
-- [x] LangGraph removed — lite agent (white_box/black_box)
+- [x] Lite RAG agent (no LangChain)
 - [x] In-memory job queue with crash recovery
 - [x] DLQ with Postgres + JSONL fallback
-- [x] Circuit breakers & retries (`tenacity`)
+- [x] Circuit breakers & retries
 - [x] PII detection (Presidio, gated by `PII_ENABLED`)
 - [x] NeMo guardrails (with lightweight fallback)
 - [x] JSON logs + Prometheus metrics (`/metrics`)
-- [ ] Golden dataset evals (Ragas) — TODO
+- [x] Health check + readiness probe
+- [x] Graceful degradation (LLM unavailable → context-only fallback)
+- [x] Parallel upload processing
+- [x] HF Spaces deployment (Dockerfile)
+- [ ] Golden dataset evals — TODO
 - [ ] LangSmith cost monitoring — TODO
-- [ ] AWS Secrets Manager — optional (env vars work)
 
 ## License
 
