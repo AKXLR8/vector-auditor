@@ -930,9 +930,10 @@ def set_upload_processor() -> None:
             _t1 = time.time()
             text: str
             page_ranges = None
+            from ..services.document_parser import parse_document
             name_lower = (record.filename or "").lower()
             if name_lower.endswith(".pdf"):
-                from ..services.document_parser import parse_document, parse_pdf_with_pages
+                from ..services.document_parser import parse_pdf_with_pages
                 md_text, (pdf_text, pr) = await asyncio.gather(
                     asyncio.to_thread(parse_document, record.filename, content),
                     asyncio.to_thread(parse_pdf_with_pages, content),

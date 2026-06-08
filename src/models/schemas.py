@@ -1,10 +1,22 @@
 """Pydantic request/response schemas — matches frontend BACKEND_API.md spec."""
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, BeforeValidator, EmailStr, Field
+
+
+def _dt_to_str(v):
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return str(v)
+
+
+DatetimeOrStr = Annotated[Optional[str], BeforeValidator(_dt_to_str)]
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────
@@ -73,7 +85,7 @@ class UserResponse(BaseModel):
     display_name: Optional[str] = None
     roles: list[str] = []
     mfa_enabled: bool = False
-    created_at: Optional[str] = None
+    created_at: DatetimeOrStr = None
 
 
 # ── Health ─────────────────────────────────────────────────────────────────
@@ -165,7 +177,7 @@ class DocumentResponse(BaseModel):
     sha256: str = ""
     cloudinary_url: Optional[str] = None
     uploaded_by: str
-    created_at: Optional[str] = None
+    created_at: DatetimeOrStr = None
 
 
 class UploadedDocument(BaseModel):
@@ -187,8 +199,8 @@ class UploadStatusResponse(BaseModel):
     error: Optional[str] = None
     document_id: Optional[str] = None
     user_id: str
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: DatetimeOrStr = None
+    updated_at: DatetimeOrStr = None
 
 
 # ── Sessions ───────────────────────────────────────────────────────────────
@@ -217,8 +229,8 @@ class SessionResponse(BaseModel):
     id: str
     title: Optional[str] = None
     user_id: str
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: DatetimeOrStr = None
+    updated_at: DatetimeOrStr = None
 
 
 class MessageResponse(BaseModel):
@@ -233,7 +245,7 @@ class MessageResponse(BaseModel):
     query_id: Optional[str] = None
     feedback: Optional[str] = None
     verification: Optional[str] = None
-    created_at: Optional[str] = None
+    created_at: DatetimeOrStr = None
 
 
 class SessionDetailResponse(SessionResponse):
