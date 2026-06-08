@@ -7,180 +7,178 @@ sdk: docker
 pinned: false
 ---
 
-# RAG Auditor
+# Vector Auditor
 
-Production-grade document Q&A system. FastAPI + lite RAG agent (no LangChain runtime) + Qdrant + Postgres + Redis.
+**Agentic document intelligence** — upload PDFs, ask questions, get cited answers with page-level citations.
 
-Designed to match the `vector-auditor-frontend` TypeScript spec at `BACKEND_API.md` (28 endpoints, 5 SSE event types, JWT with `roles[]`).
+A FastAPI backend with a lite RAG pipeline (no LangChain), Qdrant vector store, Postgres persistence, Redis caching, and circuit-breaker resilience.
 
-## Quick start (Windows / PowerShell)
+## Demo
 
-```powershell
-cd C:\Users\ajaym\OneDrive\Desktop\vector
-
-# 1. Copy and edit env
-Copy-Item .env.example .env
-# Fill in: INCEPTION_API_KEY, JWT_SECRET_KEY, DATABASE_URL
-# Optional: QDRANT_URL, QDRANT_API_KEY, REDIS_URL, CLOUDINARY_*, GITHUB_*, PII_ENABLED
-
-# 2. Install + migrate
-python -m pip install -r requirements.txt
-alembic upgrade head
-
-# 3. Run
-python run.py
-# -> http://localhost:8000  (binds 0.0.0.0, auto-reloads src/, alembic/, scripts/)
-# -> API docs:             http://localhost:8000/docs
-# -> Health:               http://localhost:8000/health
+```
+POST /query  {"question": "What are the key findings?", "mode": "white_box"}
+→ 200  {"answer": "...", "citations": [{"page": 3, "quote": "..."}], ...}
 ```
 
-### Dev flags
+## Features
 
-| Flag | Effect |
-|------|--------|
-| `python run.py` | port 8000, reload on, watch `src/` `alembic/` `scripts/` |
-| `python run.py --port 7860` | HF Spaces default port |
-| `python run.py --no-reload` | disable auto-reload (use for production-like) |
-| `python run.py --host 127.0.0.1` | bind localhost only |
-
-### Production
-
-```powershell
-alembic upgrade head
-uvicorn src.api.main:app --host 0.0.0.0 --port 7860 --workers 2
-```
-
-## Endpoints (28 spec + 3 ops)
-
-### Auth (9)
-- `POST /auth/register` · `POST /auth/login` · `POST /auth/login/mfa` · `POST /auth/logout`
-- `GET  /auth/token/refresh` · `POST /auth/mfa/setup` · `POST /auth/mfa/verify`
-- `GET  /auth/oauth/config` · `POST /auth/oauth/github`
-
-### Query (3)
-- `POST /query` · `POST /query/stream` (SSE: `citations` / `token` / `verification` / `gap_analysis` / `done` / `error`) · `POST /analyze`
-
-### Documents (5)
-- `POST   /documents` · `GET /documents` · `GET /documents/{id}` · `DELETE /documents/{id}` (204)
-- `GET    /uploads/{id}` (poll stage+progress)
-
-### Sessions (7)
-- `GET    /sessions` (wrapped in `{sessions:[]}`) · `POST /sessions` (accepts client-supplied `id`)
-- `GET    /sessions/{id}` · `PUT /sessions/{id}` · `DELETE /sessions/{id}` (204)
-- `GET    /sessions/{id}/messages` (wrapped in `{messages:[]}`)
-- `POST   /sessions/{id}/messages`
-
-### Feedback / admin / ops (4)
-- `POST /feedback` (204, body `{query_id, thumbs_up, comment?}`)
-- `GET  /admin/dlq` (wrapped in `{dead_letter_queue:[]}`, admin only)
-- `POST /cache/flush` (admin only)
-- `GET  /health` · `GET /readyz` · `GET /metrics`
-
-## Response shapes (frontend contract)
-
-```jsonc
-// Citation
-{"quote": "...", "source": "paper.pdf", "location": "Section 3.2", "page": 7}
-
-// QueryResponse
-{"answer": "...", "citations": [...], "reasoning_path": ["Retrieved 10..."],
- "tokens_used": 842, "cost_usd": 0.0021, "query_id": "abc123...",
- "timestamp": "2026-06-07T00:00:00Z", "verification": "VERIFIED", "mode": "white_box"}
-
-// HealthResponse
-{"status": "ok|degraded|down", "version": "1.0.0", "timestamp": "2026-06-07T00:00:00Z",
- "checks": {"database": "ok", "vector_store": "ok", "cache": "ok", "object_store": "ok", "llm_provider": "ok"}}
-
-// UserResponse
-{"id": "u_1", "email": "alice@example.com", "display_name": "Alice Smith",
- "roles": ["user"], "mfa_enabled": false, "created_at": "2026-06-07T00:00:00Z"}
-
-// DocumentResponse
-{"id": "d_1", "document_id": "d_1", "filename": "x.pdf", "status": "ready",
- "has_pii": false, "sha256": "9f86d0...", "cloudinary_url": "https://...",
- "uploaded_by": "u_1", "created_at": "2026-06-07T00:00:00Z"}
-
-// UploadStatusResponse
-{"id": "up_1", "filename": "x.pdf", "stage": "embedding", "progress": 60,
- "error": null, "document_id": "d_1", "user_id": "u_1",
- "created_at": "2026-06-07T00:00:00Z", "updated_at": "2026-06-07T00:00:05Z"}
-
-// SessionsListResponse
-{"sessions": [{"id": "s_1", "title": "My chat", "user_id": "u_1", "created_at": "...", "updated_at": "..."}]}
-
-// DLQResponse
-{"dead_letter_queue": [{"id": "dlq_1", "task": "upload", "payload": "...", "error": "...", "failed_at": "..."}]}
-```
-
-JWT payload: `{sub, exp, iat, jti, roles: ["user"]}`. Default new-user role: `user`.
-
-## Configuration
-
-Copy `.env.example` → `.env` and fill in:
-
-| Variable | Required | Notes |
-|----------|----------|-------|
-| `INCEPTION_API_KEY` | yes | LLM provider |
-| `JWT_SECRET_KEY` | yes (prod) | hard-fails in `ENVIRONMENT=production`; dev gets a fallback |
-| `DATABASE_URL` | no | falls back to in-memory JSONL stores (`.data/*.jsonl`) |
-| `QDRANT_URL` + `QDRANT_API_KEY` | no | falls back to in-memory vector store |
-| `REDIS_URL` | no | falls back to in-process TTLCache |
-| `CLOUDINARY_*` | no | falls back to local `uploads/` |
-| `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` | no | enables `/auth/oauth/github` |
-| `PII_ENABLED` | no | enables Presidio PII detection at upload time |
-| `ALLOWED_ORIGINS` | no | CSV, defaults to `localhost:3000,3001,5173` |
+- **RAG with citations** — multi-hop retrieval → LLM generation → verification → gap analysis
+- **Two modes**: `white_box` (full reasoning path) and `black_box` (temperature=0, terse)
+- **Parallel uploads** — 5 concurrent jobs with SHA256 dedup
+- **Page-level citations** — retrieved from pdfplumber, mapped to Qdrant chunks
+- **Graceful degradation** — circuit breakers on LLM, Qdrant, embedding; fallback to raw context when LLM is down
+- **Guardrails + PII detection** — NeMo Guardrails (with regex fallback) + Presidio PII (opt-in)
+- **Dead letter queue** — failed uploads captured for replay
+- **Streaming SSE** — `citations` / `token` / `verification` / `gap_analysis` / `done` / `error`
+- **Multi-user** — JWT auth, document isolation per user
+- **Feedback loop** — thumbs up/down per query
+- **Observability** — JSON structured logs, Prometheus `/metrics`, health `/health`, readiness `/readyz`
 
 ## Architecture
 
 ```
-src/
-├── api/              # FastAPI routes, middleware, auth
-│   ├── main.py       # 28 endpoints + 3 ops, all 5 SSE event types
-│   ├── auth.py       # JWT with roles[], refresh, MFA stubs, require_role
-│   └── middleware.py # metrics, request context, security headers, shutdown gate
-├── agents/
-│   └── document_agent.py   # query() + stream_query() + analyze_document()
-├── services/         # llm, cache, document_parser, guardrails, pii, cloudinary, token_counter, circuit_breaker, async_worker, secrets
-├── database/         # SQLAlchemy models, session, repository (in-memory fallback)
-├── vectorstore/      # Qdrant (user_id-isolated)
-├── models/           # Pydantic schemas (matches BACKEND_API.md)
-├── bootstrap.py      # Startup: load models, pre-warm, start worker
-├── observability.py  # JSON logs + Prometheus
-├── shutdown.py       # SIGTERM, in-flight tracker
-├── job_queue.py      # Stage machine: uploading→extracting→chunking→embedding→indexing→completed
-└── config.py         # pydantic-settings
-
-alembic/versions/     # 001_initial → 002_upload_jobs → 003_user_enhancements
+┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
+│  FastAPI     │────▶│  DocumentAgent   │────▶│  LLM (Incept)│
+│  36 routes   │     │  (retrieve→gen→  │     │  + circuit   │
+│  + middleware│     │   verify→gaps)   │     │  breaker     │
+└──────┬───────┘     └────────┬─────────┘     └──────────────┘
+       │                      │
+       ▼                      ▼
+┌──────────┐     ┌──────────────────────┐
+│ Postgres │     │  Qdrant + all-MiniLM │
+│ + Redis  │     │  (user-isolated)     │
+│ fallback │     │  + circuit breaker   │
+└──────────┘     └──────────────────────┘
 ```
 
-### Two retrieval modes
+## Tech Stack
 
-- **`white_box`** — full reasoning path: multi-hop retrieve → generate → verify → gap analysis. Streams `verification` and `gap_analysis` events. `reasoning_path` populated in response.
-- **`black_box`** — `temperature=0`, terse cited answer. Omits `reasoning_path`, skips `verification`/`gap_analysis` events.
+| Layer | Technology |
+|-------|-----------|
+| API | FastAPI + Uvicorn + Pydantic v2 |
+| Auth | JWT (python-jose) + bcrypt |
+| Database | PostgreSQL (SQLAlchemy async) / in-memory JSONL fallback |
+| Vector Store | Qdrant (Cloud / local / in-memory) |
+| Embeddings | SentenceTransformers all-MiniLM-L6-v2 |
+| LLM | OpenAI-compatible (Inception Labs mercury-2) |
+| Cache | Redis / in-process TTLCache |
+| File Store | Cloudinary (PDF serving) |
+| PDF Parse | MarkItDown (text) + pdfplumber (page numbers) |
+| Resilience | Circuit breakers + exponential backoff retry |
+| Observability | JSON logs + Prometheus |
+| Rate Limiting | slowapi (200/min default) |
+
+## Quick Start
+
+```bash
+# Clone
+git clone https://github.com/AKXLR8/vector-auditor.git
+cd vector-auditor
+
+# Environment
+cp .env.example .env
+# Edit .env — set at minimum: LLM_API_KEY, JWT_SECRET_KEY
+
+# Install
+python -m pip install -r requirements.txt
+
+# Run
+uvicorn src.api.main:app --reload --port 8000
+```
+
+Open http://localhost:8000/docs for interactive API docs.
+
+## Configuration
+
+| Variable | Required | Default | Notes |
+|----------|----------|---------|-------|
+| `LLM_API_KEY` | Yes | — | Inception Labs or OpenAI-compatible key |
+| `JWT_SECRET_KEY` | Yes | — | `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `DATABASE_URL` | No | in-memory | PostgreSQL with asyncpg |
+| `QDRANT_URL` | No | in-memory | Qdrant Cloud URL |
+| `QDRANT_API_KEY` | No | — | Qdrant Cloud API key |
+| `REDIS_URL` | No | in-memory | Redis for cache |
+| `CLOUDINARY_*` | No | local only | PDF file serving |
+| `LOG_FORMAT` | No | `json` | `text` for human-readable |
+| `JOB_MAX_CONCURRENT` | No | `5` | Parallel upload jobs |
+
+## API Overview (28 endpoints)
+
+### Auth `/auth/*`
+`POST register` · `POST login` · `POST login/mfa` · `POST logout` · `GET token/refresh` · `POST mfa/setup` · `POST mfa/verify` · `GET oauth/config` · `POST oauth/github`
+
+### Query `/query`
+`POST /query` — single answer with citations · `POST /query/stream` — SSE streaming · `POST /analyze` — multi-document analysis
+
+### Documents `/documents`
+`POST /documents` — upload (multi-file) · `GET /documents` — list · `GET /documents/{id}` — detail · `DELETE /documents/{id}` — remove · `GET /documents/{id}/pdf` — stream PDF
+
+### Sessions `/sessions`
+`GET /sessions` — list · `POST /sessions` — create · `GET /sessions/{id}` — detail with messages · `PUT /sessions/{id}` — rename · `DELETE /sessions/{id}` · `GET /sessions/{id}/messages` · `POST /sessions/{id}/messages`
+
+### Operations
+`POST /feedback` · `GET /admin/dlq` · `POST /cache/flush` · `GET /health` · `GET /readyz` · `GET /metrics`
 
 ## Deploy
 
-| Target | How |
-|--------|-----|
-| **Hugging Face Spaces** | `DEPLOY_HF_SPACES.md` (5 steps) — port 7860, Dockerfile, entrypoint runs `alembic upgrade head` then `uvicorn` |
-| **GitHub** | `git push origin main` |
+### Hugging Face Spaces
 
-## Production checklist
+```bash
+git remote add hf https://huggingface.co/spaces/akshayyy1/vector-auditor
+git push hf main
+```
 
-- [x] FastAPI + Pydantic validation
-- [x] Lite RAG agent (no LangChain)
-- [x] In-memory job queue with crash recovery
-- [x] DLQ with Postgres + JSONL fallback
-- [x] Circuit breakers & retries
-- [x] PII detection (Presidio, gated by `PII_ENABLED`)
-- [x] NeMo guardrails (with lightweight fallback)
-- [x] JSON logs + Prometheus metrics (`/metrics`)
+Set secrets in HF Space Settings → Variables. See `DEPLOY_HF_SPACES.md`.
+
+### Docker
+
+```bash
+docker build -t vector-auditor .
+docker run -p 7860:7860 -e LLM_API_KEY=... -e JWT_SECRET_KEY=... vector-auditor
+```
+
+## Production Checklist
+
+- [x] Circuit breakers (LLM, Qdrant, embedding)
+- [x] Retry with exponential backoff
+- [x] Graceful degradation when LLM is down
 - [x] Health check + readiness probe
-- [x] Graceful degradation (LLM unavailable → context-only fallback)
+- [x] Rate limiting (200/min default)
+- [x] Security headers (X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+- [x] Request ID tracking
+- [x] Shutdown gate (drain in-flight requests)
+- [x] JSON structured logging
+- [x] Prometheus metrics
+- [x] Dead letter queue for failed uploads
+- [x] PII detection (opt-in)
+- [x] Guardrails against prompt injection
+- [x] JWT auth with role-based access
+- [x] Document isolation per user
+- [x] SHA256 dedup on upload
 - [x] Parallel upload processing
-- [x] HF Spaces deployment (Dockerfile)
-- [ ] Golden dataset evals — TODO
-- [ ] LangSmith cost monitoring — TODO
+- [x] Multi-stage Docker build (slim image)
+- [ ] Golden dataset evals
+- [ ] LangSmith cost monitoring
+
+## Project Structure
+
+```
+src/
+├── api/                # FastAPI routes (main.py, auth.py, middleware.py)
+├── agents/             # DocumentAgent (lite RAG pipeline)
+├── services/           # LLM, cache, parsers, guardrails, PII, circuit_breaker
+├── database/           # SQLAlchemy models, repository, session
+├── vectorstore/        # Qdrant wrapper with user isolation
+├── models/             # Pydantic schemas
+├── observability.py    # JSON logs + Prometheus
+├── shutdown.py         # Graceful shutdown
+├── job_queue.py        # Upload pipeline orchestrator
+└── config.py           # pydantic-settings
+
+scripts/                # download_model.py
+alembic/                # DB migrations
+models/                 # embedding_model.pkl (gitignored, built at deploy)
+```
 
 ## License
 
