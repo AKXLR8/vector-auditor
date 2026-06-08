@@ -30,6 +30,7 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 
 ## Architecture
 ---
+```mermaid
 config:
   layout: elk
   theme: neo-dark
@@ -115,6 +116,8 @@ graph TB
   class Qdrant,Embedder,CB_Q vector
   class Agent,LLM,CB_L,Retry,Guard,Degrade llm
   class PG,Redis,JobQ,Metrics,Shutdown,TokenCounter infra
+```
+
 
 ## Tech Stack
 
@@ -149,7 +152,7 @@ python -m pip install -r requirements.txt
 
 # Run
 uvicorn src.api.main:app --reload --port 8000
-```
+
 
 Open http://localhost:8000/docs for interactive API docs.
 
