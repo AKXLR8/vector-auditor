@@ -249,6 +249,12 @@ async def list_documents(session: Optional[AsyncSession], user_id: Optional[str]
     return sorted(items, key=lambda x: x.get("created_at") or "", reverse=True)
 
 
+async def get_document_by_sha256(session: AsyncSession, sha256: str) -> Optional[dict]:
+    r = await session.execute(select(Document).where(Document.sha256 == sha256))
+    d = r.scalar_one_or_none()
+    return _doc_to_dict(d) if d else None
+
+
 async def update_document(session: Optional[AsyncSession], doc_id: str, **fields: Any) -> Optional[dict]:
     if session is not None:
         r = await session.execute(select(Document).where(Document.id == doc_id))

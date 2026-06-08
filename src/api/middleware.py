@@ -1,4 +1,4 @@
-"""HTTP middleware: request ID, security headers, shutdown gate, metrics."""
+"""HTTP middleware: request ID, structured logging, security, shutdown gate, metrics."""
 import logging
 import time
 import uuid
@@ -13,8 +13,21 @@ from ..shutdown import get_shutdown_manager
 logger = logging.getLogger("rga_auditor.middleware")
 
 
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log every request with structured fields: method, path, status, duration, request_id."""
+
+    async def dispatch(self, request: Request, call_next):
+        t0 = time.time()
+        response = await call_next(request)
+        dt = time.time() - t0
+        rid = getattr(request.state, "request_id", "?")
+        logger.info("method=%s path=%s status=%d duration=%.3fs request_id=%s",
+                     request.method, request.url.path, response.status_code, dt, rid)
+        return response
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
-    """Attach a request ID and start time. Always present."""
+    """Attach a request ID and start time to every request."""
 
     async def dispatch(self, request: Request, call_next):
         rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
@@ -22,6 +35,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         t0 = time.time()
         response = await call_next(request)
         response.headers["X-Request-ID"] = rid
+        duration_ms = int((time.time() - t0) * 1000)
+        response.headers["X-Response-Time-Ms"] = str(duration_ms)
         return response
 
 

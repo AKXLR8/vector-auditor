@@ -48,6 +48,21 @@ class CloudinaryStorage:
         import cloudinary
         return cloudinary.CloudinaryResource(public_id=public_id, resource_type=resource_type).build_url()
 
+    def get_signed_url(self, public_id: str, resource_type: str = "image", format: str = "pdf", version: str = None) -> str:
+        if not self._enabled:
+            return ""
+        from cloudinary.utils import cloudinary_url
+        opts = dict(
+            resource_type=resource_type,
+            type="upload",
+            format=format,
+            sign_url=True,
+        )
+        if version:
+            opts["version"] = version
+        url, _ = cloudinary_url(public_id, **opts)
+        return url
+
 
 _storage: Optional[CloudinaryStorage] = None
 

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.data/
+uploads/
+qdrant_db/
+frontend/
+.env
+tests/
+*.md

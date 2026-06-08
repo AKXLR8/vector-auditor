@@ -1,9 +1,12 @@
-"""Qdrant vector store with user-isolated collections."""
+"""Qdrant vector store with user-isolated collections + circuit breaker."""
+import asyncio
 import logging
 import os
 import uuid
 from pathlib import Path
 from typing import Optional
+
+from ..services.circuit_breaker import CircuitBreaker, retry_with_backoff
 
 logger = logging.getLogger("rga_auditor.qdrant")
 
@@ -26,13 +29,15 @@ class VectorStore:
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         self.collection_name = collection_name
-        self.splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+        self.splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
         self.embedding_dim = 384
+        self._search_cb = CircuitBreaker(name="qdrant_search", failure_threshold=5, recovery_timeout_s=30.0)
+        self._index_cb = CircuitBreaker(name="qdrant_index", failure_threshold=3, recovery_timeout_s=60.0)
 
         url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
         key = qdrant_api_key or os.getenv("QDRANT_API_KEY") or None
         try:
-            self.client = QdrantClient(url=url, api_key=key)
+            self.client = QdrantClient(url=url, api_key=key, timeout=30)
             self._create_collection()
             logger.info("Qdrant connected to %s", url)
         except Exception as e:
@@ -73,7 +78,31 @@ class VectorStore:
             )
             logger.info("Created collection %s", self.collection_name)
 
-    async def add_document(self, user_id: str, document_id: str, filename: str, text: str) -> int:
+    @staticmethod
+    def _map_chunks_to_pages(chunks: list[str], text: str, page_ranges: list[dict]) -> list[int]:
+        """Map each chunk to a page number using character-offset ranges.
+        Uses incremental search to avoid O(n*m) scanning from start each time."""
+        pages: list[int] = []
+        search_start = 0
+        for chunk in chunks:
+            pos = text.find(chunk, search_start)
+            if pos < 0:
+                pos = text.find(chunk)
+            pg = 0
+            if pos >= 0:
+                for pr in page_ranges:
+                    if pr["start"] <= pos < pr["end"]:
+                        pg = pr["page"]
+                        break
+                search_start = pos + 1
+            pages.append(pg)
+        return pages
+
+    async def add_document(self, user_id: str, document_id: str, filename: str, text: str, page_ranges: Optional[list[dict]] = None) -> int:
+        return await self._index_cb.call(self._do_add_document, user_id, document_id, filename, text, page_ranges)
+
+    @retry_with_backoff(max_retries=2, base_delay_s=0.5, retryable_exceptions=(ConnectionError, TimeoutError, OSError))
+    async def _do_add_document(self, user_id: str, document_id: str, filename: str, text: str, page_ranges: Optional[list[dict]] = None) -> int:
         import time
         from ..services.async_worker import run_sync
         from qdrant_client.http import models
@@ -86,10 +115,12 @@ class VectorStore:
             logger.warning("VectorStore.add_document: no chunks for %s/%s", user_id, document_id)
             return 0
 
+        chunk_pages: list[int] = []
+        if page_ranges:
+            chunk_pages = self._map_chunks_to_pages(chunks, text, page_ranges)
+
         t1 = time.monotonic()
-        vectors = await run_sync(self._model.encode, chunks)
-        if hasattr(vectors, "tolist"):
-            vectors = vectors.tolist()
+        vectors = await _run_embedding(self._model, chunks)
         logger.info("VectorStore.add_document: encoded %d chunks in %.2fs", len(chunks), time.monotonic() - t1)
 
         points = [
@@ -101,6 +132,7 @@ class VectorStore:
                     "document_id": document_id,
                     "filename": filename,
                     "chunk_index": i,
+                    "page": chunk_pages[i] if chunk_pages else None,
                     "text": chunk,
                 },
             )
@@ -108,17 +140,19 @@ class VectorStore:
         ]
 
         t2 = time.monotonic()
-        BATCH_SIZE = 100
+        BATCH_SIZE = 500
         total = len(points)
+        tasks = []
         for i in range(0, total, BATCH_SIZE):
             batch = points[i:i+BATCH_SIZE]
-            await run_sync(self.client.upsert, collection_name=self.collection_name, points=batch, wait=True)
-            logger.info("VectorStore.add_document: upserted batch %d/%d (%d points) in %.2fs",
-                         i//BATCH_SIZE + 1, (total-1)//BATCH_SIZE + 1, len(batch), time.monotonic() - t2)
-        logger.info("VectorStore.add_document: completed %d points in %.2fs (total %.2fs)", total, time.monotonic() - t2, time.monotonic() - t0)
+            tasks.append(run_sync(self.client.upsert, collection_name=self.collection_name, points=batch, wait=True))
+        if tasks:
+            await asyncio.gather(*tasks)
+        logger.info("VectorStore.add_document: upserted %d points in %d parallel batches in %.2fs (total %.2fs)",
+                     total, len(tasks), time.monotonic() - t2, time.monotonic() - t0)
         return len(chunks)
 
-    async def search(
+    async def _do_search(
         self,
         user_id: str,
         query: str,
@@ -128,15 +162,21 @@ class VectorStore:
         from ..services.async_worker import run_sync
         from qdrant_client.http import models
 
-        vec = await run_sync(self._model.encode, [query])
-        if hasattr(vec, "tolist"):
-            vec = vec.tolist()
+        vec = await _run_embedding(self._model, [query])
         flt = models.Filter(must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))])
         if document_ids:
             flt.must.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
+        logger.info("Qdrant.search: user=%s query=%.80s k=%d doc_ids=%s", user_id, query, k, document_ids)
         resp = await run_sync(
             self.client.query_points, collection_name=self.collection_name, query=vec[0], limit=k, query_filter=flt
         )
+        n = len(resp.points)
+        logger.info("Qdrant.search: got %d points", n)
+        if n > 0:
+            logger.info("Qdrant.search: first point doc_id=%s filename=%s score=%.4f",
+                         resp.points[0].payload.get("document_id"),
+                         resp.points[0].payload.get("filename"),
+                         resp.points[0].score)
         return [
             {
                 "id": r.id,
@@ -144,10 +184,20 @@ class VectorStore:
                 "document_id": r.payload.get("document_id"),
                 "filename": r.payload.get("filename"),
                 "chunk_index": r.payload.get("chunk_index"),
+                "page": r.payload.get("page"),
                 "text": r.payload.get("text", ""),
             }
             for r in resp.points
         ]
+
+    async def search(
+        self,
+        user_id: str,
+        query: str,
+        k: int = 10,
+        document_ids: Optional[list[str]] = None,
+    ) -> list[dict]:
+        return await self._search_cb.call(self._do_search, user_id, query, k, document_ids)
 
     def delete_document(self, user_id: str, document_id: str) -> None:
         from qdrant_client.http import models
@@ -168,3 +218,11 @@ def get_vector_store() -> VectorStore:
     if _store is None:
         _store = VectorStore()
     return _store
+
+
+async def _run_embedding(model, texts: list[str]) -> list:
+    from ..services.async_worker import run_sync
+    vec = await run_sync(model.encode, texts, batch_size=128, show_progress_bar=False)
+    if hasattr(vec, "tolist"):
+        vec = vec.tolist()
+    return vec

@@ -45,6 +45,7 @@ from ..database.repository import (
     delete_session,
     dlq_size,
     get_document,
+    get_document_by_sha256,
     get_session,
     get_user_by_email,
     get_user_by_id,
@@ -122,6 +123,7 @@ from .auth import (
 from .middleware import (
     MetricsMiddleware,
     RequestContextMiddleware,
+    RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
     ShutdownGateMiddleware,
 )
@@ -184,7 +186,10 @@ def _user_response(u: dict) -> UserResponse:
     )
 
 
-def _doc_response(d: dict) -> DocumentResponse:
+def _doc_response(d: dict, base_url: str = "") -> DocumentResponse:
+    cu: Optional[str] = d.get("cloudinary_url")
+    if cu and base_url:
+        cu = f"{base_url.rstrip('/')}/documents/{d['id']}/pdf"
     return DocumentResponse(
         id=d["id"],
         document_id=d.get("id"),
@@ -192,7 +197,7 @@ def _doc_response(d: dict) -> DocumentResponse:
         status=d.get("status", "processing"),
         has_pii=d.get("has_pii", False),
         sha256=d.get("sha256") or "",
-        cloudinary_url=d.get("cloudinary_url"),
+        cloudinary_url=cu,
         uploaded_by=d.get("uploaded_by", ""),
         created_at=d.get("created_at"),
     )
@@ -211,8 +216,9 @@ def create_app() -> FastAPI:
     app = FastAPI(title=TITLE, description=DESCRIPTION, version=VERSION)
 
     app.state.limiter = limiter
-    app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(MetricsMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(ShutdownGateMiddleware)
     app.add_middleware(
@@ -232,34 +238,84 @@ def create_app() -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     async def health():
         checks: dict[str, str] = {}
+        circuit_breaker_info: dict[str, dict] = {}
+
         try:
             get_cache()
             checks["cache"] = "ok"
         except Exception as e:
             checks["cache"] = f"error: {e}"
+
         try:
             get_vector_store()
             checks["vector_store"] = "ok"
         except Exception as e:
             checks["vector_store"] = f"error: {e}"
+
+        try:
+            vs = get_vector_store()
+            qs = getattr(vs, "_search_cb", None)
+            qi = getattr(vs, "_index_cb", None)
+            if qs is not None:
+                circuit_breaker_info["qdrant_search"] = {
+                    "state": qs.state,
+                    "failures": qs.failure_count,
+                    "available": qs.is_available(),
+                }
+            if qi is not None:
+                circuit_breaker_info["qdrant_index"] = {
+                    "state": qi.state,
+                    "failures": qi.failure_count,
+                    "available": qi.is_available(),
+                }
+        except Exception:
+            pass
+
         try:
             checks["database"] = "ok" if get_session_factory() else "degraded: in-memory fallback"
         except Exception as e:
             checks["database"] = f"error: {e}"
+
         try:
             get_cloudinary()
             checks["object_store"] = "ok"
         except Exception as e:
             checks["object_store"] = f"error: {e}"
+
         try:
             from ..services.llm import get_llm
-            get_llm()
-            checks["llm_provider"] = "ok"
+            llm = get_llm()
+            cb = getattr(llm, "_cb", None)
+            if cb is not None:
+                circuit_breaker_info["llm"] = {
+                    "state": cb.state,
+                    "failures": cb.failure_count,
+                    "available": cb.is_available(),
+                }
+            checks["llm_provider"] = "ok" if llm.is_available() else "degraded: circuit open"
         except Exception as e:
             checks["llm_provider"] = f"error: {e}"
+
+        try:
+            from ..shutdown import get_shutdown_manager
+            sm = get_shutdown_manager()
+            checks["shutdown_gate"] = "ok" if not sm.is_shutting_down else "shutting_down"
+        except Exception:
+            checks["shutdown_gate"] = "ok"
+
+        cb_status = "ok"
+        for name, info in circuit_breaker_info.items():
+            if not info.get("available", True):
+                cb_status = "degraded"
+                checks[f"circuit_breaker/{name}"] = info["state"]
+                break
+        if cb_status == "ok":
+            checks["circuit_breakers"] = "ok"
+
         overall = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
         if any(v.startswith("error") for v in checks.values()):
             overall = "down"
+
         return HealthResponse(
             status=overall,
             version=VERSION,
@@ -425,11 +481,20 @@ def create_app() -> FastAPI:
     @limiter.limit("10/minute")
     async def analyze(request: Request, body: AnalyzeRequest, user=Depends(current_user)):
         from ..services.llm import LLMError
+        logger.info("ANALYZE request: user=%s question=%r doc_ids=%s max_cit=%s",
+                     user["id"], body.question, body.document_ids, body.max_citations)
         agent = _get_agent()
         try:
-            return await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
+            result = await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
+            logger.info("ANALYZE response: summary=%.200s doc_ids=%s len(citations)=%d",
+                         result.summary, result.documents_analyzed, len(result.citations))
+            return result
         except LLMError as e:
+            logger.error("ANALYZE LLMError: %s", e)
             raise HTTPException(status_code=502, detail=str(e))
+        except Exception as e:
+            logger.exception("ANALYZE unhandled error")
+            raise HTTPException(status_code=500, detail=str(e))
 
     # ── Documents ─────────────────────────────────────────────────────────
 
@@ -437,62 +502,95 @@ def create_app() -> FastAPI:
     @limiter.limit("10/minute")
     async def upload_documents(request: Request, files: list[UploadFile] = File(...), user=Depends(current_user)):
         sf = get_session_factory()
-        uploaded: list[UploadedDocument] = []
-        for f in files:
+
+        async def _process_one(f: UploadFile) -> UploadedDocument:
+            # 1. Read content
             content = await f.read()
             if len(content) > MAX_FILE_SIZE:
                 raise HTTPException(status_code=413, detail=f"{f.filename} too large")
             safe = sanitize_filename(f.filename) or "document"
             doc_id = uuid.uuid4().hex
             upload_id = uuid.uuid4().hex
-            target = UPLOAD_DIR / f"{upload_id}_{safe}"
-            target.write_bytes(content)
-            digest = hashlib.sha256(content).hexdigest()
+            target = UPLOAD_DIR / f"{doc_id}_{safe}"
 
-            # Optional PII detection (best-effort)
-            has_pii = False
-            try:
-                pii = get_pii_detector()
-                if pii and getattr(pii, "enabled", True):
+            # 2. Write to disk + compute SHA256 + PII + Cloudinary — all in parallel
+            pii_detector = get_pii_detector()
+            cli = get_cloudinary()
+
+            async def _write_and_hash() -> str:
+                target.write_bytes(content)
+                return hashlib.sha256(content).hexdigest()
+
+            async def _detect_pii() -> bool:
+                if not pii_detector or not getattr(pii_detector, "enabled", True):
+                    return False
+                try:
                     text_sample = content[:100_000].decode("utf-8", errors="ignore")
-                    has_pii = bool(pii.detect(text_sample))
-            except Exception:
-                has_pii = False
+                    return bool(pii_detector.detect(text_sample))
+                except Exception:
+                    return False
 
-            # Optional Cloudinary upload (best-effort)
-            cloudinary_url: Optional[str] = None
-            cloudinary_public_id: Optional[str] = None
-            try:
-                cli = get_cloudinary()
-                if cli:
-                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}", resource_type="auto")
+            async def _cloudinary_upload() -> tuple[Optional[str], Optional[str]]:
+                if not cli:
+                    return None, None
+                try:
+                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}")
                     if isinstance(res, dict):
-                        cloudinary_url = res.get("secure_url") or res.get("url")
-                        cloudinary_public_id = res.get("public_id")
-            except Exception as e:
-                logger.debug("cloudinary upload failed: %s", e)
+                        cu = res.get("secure_url") or res.get("url")
+                        cpid = res.get("public_id")
+                        logger.info("CLOUDINARY: uploaded %s → %s (type=%s)", safe, cu, res.get("resource_type"))
+                        return cu, cpid
+                    logger.warning("CLOUDINARY: upload response not a dict for %s", safe)
+                except Exception as e:
+                    logger.warning("CLOUDINARY: upload failed for %s: %s", safe, e)
+                return None, None
 
+            digest, has_pii, (cloudinary_url, cloudinary_public_id) = await asyncio.gather(
+                _write_and_hash(), _detect_pii(), _cloudinary_upload(),
+            )
+
+            # 3. Dedup check
+            is_duplicate = False
+            if digest and sf is not None:
+                async with sf() as s:
+                    existing = await get_document_by_sha256(s, digest)
+                    if existing and existing.get("uploaded_by") == user["id"]:
+                        is_duplicate = True
+                        doc_id = existing["id"]
+                        safe = existing["filename"]
+
+            # 4. DB insert + enqueue
+            status = "duplicate" if is_duplicate else "processing"
             async with _maybe_session(sf) as s:
                 await create_document(
                     s,
                     id=doc_id,
                     uploaded_by=user["id"],
                     filename=safe,
-                    status="processing",
+                    status=status,
                     cloudinary_url=cloudinary_url,
                     cloudinary_public_id=cloudinary_public_id,
                     sha256=digest,
                     has_pii=has_pii,
                 )
-            record = JobRecord(
-                id=upload_id,
-                user_id=user["id"],
-                document_id=doc_id,
-                filename=safe,
-                content_path=str(target),
-            )
-            await get_worker().enqueue(record)
-            uploaded.append(UploadedDocument(upload_id=upload_id, document_id=doc_id, filename=safe, status="processing"))
+            if not is_duplicate:
+                record = JobRecord(
+                    id=upload_id,
+                    user_id=user["id"],
+                    document_id=doc_id,
+                    filename=safe,
+                    content_path=str(target),
+                )
+                await get_worker().enqueue(record)
+            return UploadedDocument(upload_id=upload_id, document_id=doc_id, filename=safe, status=status)
+
+        results = await asyncio.gather(*[_process_one(f) for f in files], return_exceptions=True)
+        uploaded: list[UploadedDocument] = []
+        for r in results:
+            if isinstance(r, Exception):
+                logger.error("Upload sub-task failed: %s", r)
+                continue
+            uploaded.append(r)
         return UploadResponse(uploaded_documents=uploaded)
 
     @app.get("/documents", response_model=list[DocumentResponse])
@@ -500,16 +598,17 @@ def create_app() -> FastAPI:
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
             docs = await list_documents(s, user_id=user["id"])
-        return [_doc_response(d) for d in docs]
+        base = str(request.base_url)
+        return [_doc_response(d, base_url=base) for d in docs]
 
     @app.get("/documents/{doc_id}", response_model=DocumentResponse)
-    async def get_doc(doc_id: str, user=Depends(current_user)):
+    async def get_doc(doc_id: str, request: Request, user=Depends(current_user)):
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
             d = await get_document(s, doc_id)
         if not d or d.get("uploaded_by") != user["id"]:
             raise HTTPException(status_code=404, detail="not found")
-        return _doc_response(d)
+        return _doc_response(d, base_url=str(request.base_url))
 
     @app.delete("/documents/{doc_id}", status_code=204)
     async def del_doc(doc_id: str, user=Depends(current_user)):
@@ -525,6 +624,43 @@ def create_app() -> FastAPI:
             logger.warning("qdrant delete failed: %s", e)
         return Response(status_code=204)
 
+    @app.get("/documents/{doc_id}/pdf")
+    async def stream_document_pdf(doc_id: str):
+        sf = get_session_factory()
+        async with _maybe_session(sf) as s:
+            d = await get_document(s, doc_id)
+            if not d:
+                docs = await list_documents(s)
+                match = [x for x in docs if x.get("filename") == doc_id]
+                d = match[0] if match else None
+        if not d:
+            raise HTTPException(status_code=404, detail="not found")
+        cu = d.get("cloudinary_url")
+        filename = d.get("filename", "document.pdf")
+        print(f"PDF-DEBUG: doc_id={doc_id} cu={cu}")
+        if not cu:
+            raise HTTPException(status_code=404, detail="no cloudinary URL")
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                resp = await client.get(cu)
+                print(f"PDF-DEBUG: Cloudinary status={resp.status_code} type={resp.headers.get('content-type')}")
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=502, detail="Cloudinary returned " + str(resp.status_code))
+                return StreamingResponse(
+                    resp.iter_bytes(),
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'inline; filename="{filename}"',
+                        "Access-Control-Allow-Origin": "*",
+                        "X-Content-Type-Options": "nosniff",
+                    },
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"PDF-DEBUG: EXCEPTION={e}")
+            raise HTTPException(status_code=502, detail="failed to fetch PDF")
+
     @app.post("/documents/backfill")
     async def backfill_documents(request: Request, user=Depends(current_user)):
         sf = get_session_factory()
@@ -532,8 +668,6 @@ def create_app() -> FastAPI:
             docs = await list_documents(s, user_id=user["id"])
         updated = 0
         for doc in docs:
-            if doc.get("cloudinary_url"):
-                continue
             safe = doc.get("filename", "document")
             doc_id = doc["id"]
             local = UPLOAD_DIR / f"{doc_id}_{safe}"
@@ -547,7 +681,7 @@ def create_app() -> FastAPI:
             try:
                 cli = get_cloudinary()
                 if cli:
-                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}", resource_type="auto")
+                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}")
                     cu = res.get("secure_url") or res.get("url")
                     if cu:
                         async with _maybe_session(sf) as s:
@@ -592,6 +726,15 @@ def create_app() -> FastAPI:
         title = body.title or "New chat"
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
+            existing = await get_session(s, sid, user_id=user["id"])
+            if existing:
+                return SessionResponse(
+                    id=existing["id"],
+                    title=existing.get("title"),
+                    user_id=existing["user_id"],
+                    created_at=existing.get("created_at"),
+                    updated_at=existing.get("updated_at"),
+                )
             row = await create_session(s, sid, user["id"], title)
         return SessionResponse(
             id=row["id"],
@@ -785,13 +928,27 @@ def set_upload_processor() -> None:
             await get_worker().queue.update(record.id, stage="extracting", progress=20)
             content = Path(record.content_path).read_bytes()
             _t1 = time.time()
-            text = parse_document(record.filename, content)
-            logger.info("UPLOAD: parsed %s → %d chars in %.2fs", record.filename, len(text), time.time() - _t1)
+            text: str
+            page_ranges = None
+            name_lower = (record.filename or "").lower()
+            if name_lower.endswith(".pdf"):
+                from ..services.document_parser import parse_document, parse_pdf_with_pages
+                md_text, (pdf_text, pr) = await asyncio.gather(
+                    asyncio.to_thread(parse_document, record.filename, content),
+                    asyncio.to_thread(parse_pdf_with_pages, content),
+                )
+                text = md_text  # MarkItDown quality for embedding
+                page_ranges = pr
+                logger.info("UPLOAD: parsed PDF %s → %d chars (MarkItDown) + %d pages (pdfplumber) in %.2fs",
+                             record.filename, len(text), len(page_ranges or []), time.time() - _t1)
+            else:
+                text = parse_document(record.filename, content)
+                logger.info("UPLOAD: parsed %s → %d chars in %.2fs", record.filename, len(text), time.time() - _t1)
             await get_worker().queue.update(record.id, stage="chunking", progress=40)
             await get_worker().queue.update(record.id, stage="embedding", progress=60)
             _t2 = time.time()
             n_chunks = await get_vector_store().add_document(
-                user_id=record.user_id, document_id=record.document_id, filename=record.filename, text=text
+                user_id=record.user_id, document_id=record.document_id, filename=record.filename, text=text, page_ranges=page_ranges
             )
             logger.info("UPLOAD: indexed %d chunks in %.2fs (total %.2fs)", n_chunks, time.time() - _t2, time.time() - _t0)
             await get_worker().queue.update(record.id, stage="indexing", progress=90)

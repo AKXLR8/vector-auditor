@@ -17,6 +17,7 @@ logger = logging.getLogger("rga_auditor.jobs")
 
 PROCESSOR_TIMEOUT_S = float(os.getenv("JOB_PROCESSOR_TIMEOUT", "300"))
 WORKER_POLL_INTERVAL_S = float(os.getenv("JOB_POLL_INTERVAL", "1.0"))
+MAX_CONCURRENT_JOBS = int(os.getenv("JOB_MAX_CONCURRENT", "5"))
 
 # Allowed stages
 STAGE_UPLOADING = "uploading"
@@ -161,6 +162,8 @@ class JobQueueWorker:
         self.processor = processor
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        self._sem = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+        self._active_tasks: set[asyncio.Task] = set()
 
     def set_processor(self, fn: ProcessorFn) -> None:
         self.processor = fn
@@ -169,11 +172,15 @@ class JobQueueWorker:
         if self._task is not None:
             return
         await self.queue.requeue_processing()
+        self._sem = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+        self._active_tasks: set[asyncio.Task] = set()
         self._task = asyncio.create_task(self._run(), name="job-queue-worker")
-        logger.info("Job queue worker started")
+        logger.info("Job queue worker started (max_concurrent=%d)", MAX_CONCURRENT_JOBS)
 
     async def stop(self) -> None:
         self._stop.set()
+        for t in list(self._active_tasks):
+            t.cancel()
         if self._task is not None:
             self._task.cancel()
             try:
@@ -187,9 +194,12 @@ class JobQueueWorker:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
+            self._active_tasks = {t for t in self._active_tasks if not t.done()}
             try:
+                await self._sem.acquire()
                 record = await self.queue.claim()
                 if record is None:
+                    self._sem.release()
                     try:
                         await asyncio.wait_for(self.queue._wake.wait(), timeout=WORKER_POLL_INTERVAL_S)
                     except asyncio.TimeoutError:
@@ -199,24 +209,30 @@ class JobQueueWorker:
                         self.queue._wake.set()
                     continue
                 if self.processor is None:
+                    self._sem.release()
                     await self.queue.fail(record, "no processor registered")
                     continue
-                try:
-                    await asyncio.wait_for(self.processor(record), timeout=PROCESSOR_TIMEOUT_S)
-                    await self.queue.complete(record)
-                except asyncio.TimeoutError:
-                    await self.queue.fail(record, f"timeout after {PROCESSOR_TIMEOUT_S}s")
-                except asyncio.CancelledError:
-                    await self.queue.fail(record, "worker cancelled")
-                    raise
-                except Exception as e:
-                    logger.exception("job %s failed", record.id)
-                    await self.queue.fail(record, f"{type(e).__name__}: {e}"[:1000])
+                task = asyncio.create_task(self._process_one(record), name=f"job-{record.id}")
+                self._active_tasks.add(task)
+                task.add_done_callback(lambda _t: self._sem.release())
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                self._sem.release()
                 logger.exception("worker loop error")
                 await asyncio.sleep(1.0)
+
+    async def _process_one(self, record: JobRecord) -> None:
+        try:
+            await asyncio.wait_for(self.processor(record), timeout=PROCESSOR_TIMEOUT_S)
+            await self.queue.complete(record)
+        except asyncio.TimeoutError:
+            await self.queue.fail(record, f"timeout after {PROCESSOR_TIMEOUT_S}s")
+        except asyncio.CancelledError:
+            await self.queue.fail(record, "worker cancelled")
+        except Exception as e:
+            logger.exception("job %s failed", record.id)
+            await self.queue.fail(record, f"{type(e).__name__}: {e}"[:1000])
 
 
 _queue: Optional[InMemoryJobQueue] = None

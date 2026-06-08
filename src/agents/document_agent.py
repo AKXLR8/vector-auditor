@@ -2,6 +2,7 @@
 
 Pipeline: understand → retrieve → evaluate (loop) → generate → verify → gap_analysis
 Two modes: white_box (full reasoning), black_box (temperature=0, minimal prompt).
+Graceful degradation when LLM is unavailable.
 """
 import asyncio
 import json
@@ -22,7 +23,8 @@ from ..models.schemas import (
     QueryResponse,
 )
 from ..services.cache import CACHE_TTL, cache_key, get_cache
-from ..services.llm import LLM, get_llm
+from ..services.circuit_breaker import CircuitBreakerOpenError
+from ..services.llm import LLM, LLMError, get_llm
 from ..services.token_counter import estimate_cost, estimate_tokens
 from ..vectorstore.Qdrant import get_vector_store
 
@@ -79,7 +81,9 @@ class DocumentAgent:
         return out
 
     async def _retrieve(self, user_id: str, question: str, document_ids: Optional[list[str]], k: int) -> list[Citation]:
+        logger.info("_retrieve: user=%s question=%.100s doc_ids=%s k=%d", user_id, question, document_ids, k)
         results = await self.vs.search(user_id=user_id, query=question, k=k, document_ids=document_ids)
+        logger.info("_retrieve: search returned %d results", len(results))
         citations: list[Citation] = []
         for r in results:
             location = r.get("location") or f"chunk {r.get('chunk_index', 0)}"
@@ -92,6 +96,7 @@ class DocumentAgent:
                     document_id=r.get("document_id"),
                 )
             )
+        logger.info("_retrieve: built %d citations", len(citations))
         return self._truncate_citations(citations)
 
     async def _generate(self, question: str, context: list[Citation], mode: Mode, history: Optional[list[MessageHistory]]) -> tuple[str, int, int]:
@@ -112,10 +117,30 @@ class DocumentAgent:
             return cached, prompt_tokens, answer_tokens
         temperature = 0.0 if mode == Mode.black_box else None
         max_tokens = 3048 if mode == Mode.white_box else None
-        answer = await self.llm.chat(prompt, system=sys, temperature=temperature, max_tokens=max_tokens)
-        await cache.set(key, answer, CACHE_TTL["llm_response"])
-        answer_tokens = estimate_tokens(answer)
-        return answer, prompt_tokens, answer_tokens
+        try:
+            answer = await self.llm.chat(prompt, system=sys, temperature=temperature, max_tokens=max_tokens)
+            await cache.set(key, answer, CACHE_TTL["llm_response"])
+            answer_tokens = estimate_tokens(answer)
+            return answer, prompt_tokens, answer_tokens
+        except (CircuitBreakerOpenError, LLMError) as e:
+            logger.warning("LLM unavailable for _generate: %s — returning context-only fallback", e)
+            fallback = self._build_fallback_answer(question, context)
+            answer_tokens = estimate_tokens(fallback)
+            return fallback, prompt_tokens, answer_tokens
+
+    @staticmethod
+    def _build_fallback_answer(question: str, context: list[Citation]) -> str:
+        if not context:
+            return f"**LLM temporarily unavailable.** I found no context to answer: {question}"
+        lines = [f"**LLM temporarily unavailable.** Here are relevant excerpts from your documents for: {question}\n"]
+        for i, c in enumerate(context[:15]):
+            src = c.source or "unknown"
+            loc = c.location or ""
+            pg = f" (p. {c.page})" if c.page else ""
+            lines.append(f"*[{i+1}]* **{src}**{pg} — {loc}:")
+            lines.append(f"  > {c.quote[:500]}")
+        lines.append("\n*Please retry shortly when the LLM service is restored for a synthesized answer.*")
+        return "\n".join(lines)
 
     async def _verify(self, question: str, answer: str, context: list[Citation]) -> str:
         if not context:
@@ -126,7 +151,11 @@ class DocumentAgent:
             "Is every claim in the answer supported by the context? Reply with one line: "
             "'VERIFIED' or 'ISSUES: <specific unsupported claims>'."
         )
-        return await self.llm.chat(prompt, system="You are a strict fact-checker.")
+        try:
+            return await self.llm.chat(prompt, system="You are a strict fact-checker.")
+        except (CircuitBreakerOpenError, LLMError) as e:
+            logger.warning("LLM unavailable for _verify: %s", e)
+            return "VERIFICATION_SKIPPED: LLM unavailable"
 
     async def _gaps(self, question: str, context: list[Citation]) -> list[str]:
         if not context:
@@ -137,7 +166,11 @@ class DocumentAgent:
             "List up to 3 specific research gaps or missing information in the context. "
             "Return as a JSON array of strings, e.g. [\"gap 1\", \"gap 2\"]."
         )
-        raw = await self.llm.chat(prompt, system="You identify research gaps concisely.")
+        try:
+            raw = await self.llm.chat(prompt, system="You identify research gaps concisely.")
+        except (CircuitBreakerOpenError, LLMError) as e:
+            logger.warning("LLM unavailable for _gaps: %s", e)
+            return []
         m = re.search(r"\[.*?\]", raw, re.DOTALL)
         if not m:
             return []
@@ -195,7 +228,10 @@ class DocumentAgent:
             reasoning_path.append("Verified answer against source citations")
             if gaps:
                 reasoning_path.append("Identified %d research gap(s)" % len(gaps))
-            reasoning_path.append("VERIFIED" if verification.startswith("VERIFIED") else f"ISSUES: {verification[:120]}")
+            if verification.startswith("VERIFICATION_SKIPPED"):
+                reasoning_path.append("Verification skipped — LLM unavailable")
+            else:
+                reasoning_path.append("VERIFIED" if verification.startswith("VERIFIED") else f"ISSUES: {verification[:120]}")
 
         cost = estimate_cost(prompt_tokens, answer_tokens)
         query_id = uuid.uuid4().hex
@@ -305,7 +341,10 @@ class DocumentAgent:
     async def analyze_document(self, user_id: str, question: Optional[str], document_ids: Optional[list[str]],
                                 max_citations: Optional[int] = None) -> DocumentAnalysis:
         req_doc_ids = document_ids or []
+        logger.info("analyze_document: user=%s question=%r doc_ids=%s max_cit=%s",
+                     user_id, question, req_doc_ids, max_citations)
         if question and re.match(r"^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|sup|howdy|yo)\b", question.strip(), re.I):
+            logger.info("analyze_document: greeting detected, returning early")
             return DocumentAnalysis(
                 summary="Hi there! Please select documents to analyze, or ask me a question about your documents.",
                 key_findings=[], methodology="",
@@ -314,18 +353,34 @@ class DocumentAgent:
                 citations=[], documents_analyzed=[],
             )
         if not req_doc_ids:
-            return DocumentAnalysis(
-                summary="Please select one or more documents to analyze.",
-                key_findings=[], methodology="",
-                research_gaps=[], contradictions=[], open_questions=[],
-                limitations="No documents selected.", confidence="low",
-                citations=[], documents_analyzed=[],
-            )
+            logger.info("analyze_document: no doc_ids provided, fetching all user docs")
+            from ..database.repository import list_documents
+            from ..database.session import get_session_factory
+            sf = get_session_factory()
+            if sf:
+                async with sf() as s:
+                    all_docs = await list_documents(s, user_id=user_id)
+            else:
+                all_docs = await list_documents(None, user_id=user_id)
+            ready = [d for d in all_docs if d.get("status") == "ready"]
+            if not ready:
+                logger.info("analyze_document: no ready docs found for user")
+                return DocumentAnalysis(
+                    summary="No processed documents found. Upload a document first.",
+                    key_findings=[], methodology="",
+                    research_gaps=[], contradictions=[], open_questions=[],
+                    limitations="No documents available.", confidence="low",
+                    citations=[], documents_analyzed=[],
+                )
+            req_doc_ids = [d["id"] for d in ready]
+            logger.info("analyze_document: auto-selected %d ready docs: %s", len(req_doc_ids), req_doc_ids)
         if len(req_doc_ids) > 1:
             per_doc = max(3, 12 // len(req_doc_ids))
+            logger.info("analyze_document: multi-doc mode (%d docs), per_doc=%d", len(req_doc_ids), per_doc)
             citations: list[Citation] = []
             for did in req_doc_ids:
                 part = await self._retrieve(user_id, question or "key findings and methodology", [did], per_doc)
+                logger.info("analyze_document: retrieved %d citations for doc=%s", len(part), did)
                 citations.extend(part)
             if citations:
                 dedup = {}
@@ -333,10 +388,13 @@ class DocumentAgent:
                     dedup.setdefault(c.quote, c)
                 citations = list(dedup.values())[:max_citations or 20]
         else:
+            logger.info("analyze_document: single-doc mode, doc=%s", req_doc_ids[0])
             citations = await self._retrieve(user_id, question or "key findings and methodology", req_doc_ids or None,
                                               min(self.retrieve_k * 2, 20))
         citations = self._truncate_citations(citations)
+        logger.info("analyze_document: total citations after truncation=%d", len(citations))
         if not citations:
+            logger.info("analyze_document: no citations found, returning empty")
             return DocumentAnalysis(
                 summary="No content found.", key_findings=[], methodology="",
                 research_gaps=[], contradictions=[], open_questions=[],
@@ -372,19 +430,40 @@ class DocumentAgent:
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
             f"Return ONLY a valid JSON object, no commentary."
         )
-        raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.",
-                                  max_tokens=4096)
+        logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
+        try:
+            raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.",
+                                      max_tokens=4096)
+        except (CircuitBreakerOpenError, LLMError) as e:
+            logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
+            raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))
+            return DocumentAnalysis(
+                summary=f"**LLM temporarily unavailable.** Raw context from {len(citations)} excerpts.",
+                key_findings=[f"Found {len(citations)} relevant passages across {len(docs_analyzed)} documents."],
+                methodology="LLM service unavailable — showing raw excerpts only.",
+                research_gaps=[], contradictions=[], open_questions=[],
+                limitations="Full analysis requires LLM service. Showing raw excerpts below:\n\n" + raw_citations,
+                confidence="low",
+                citations=citations,
+                documents_analyzed=docs_analyzed if not is_multi else doc_ids_with_data or docs_analyzed,
+            )
+        logger.info("analyze_document: LLM raw response length=%d chars, preview=%.300s", len(raw), raw)
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         data: dict = {}
         if m:
             try:
                 data = json.loads(m.group(0))
-            except json.JSONDecodeError:
+                logger.info("analyze_document: parsed JSON with keys=%s", list(data.keys()))
+            except json.JSONDecodeError as e:
+                logger.warning("analyze_document: JSON parse error: %s", e)
                 data = {}
         if not data:
+            logger.warning("analyze_document: no valid JSON in LLM response, using fallback")
             data = {"summary": raw[:500], "key_findings": [], "methodology": "",
                     "research_gaps": [], "contradictions": [], "open_questions": [],
                     "limitations": "Could not parse structured output.", "confidence": "low"}
+        logger.info("analyze_document: final summary=%.200s doc_analyzed=%s n_citations=%d",
+                     data.get("summary", ""), doc_ids_with_data or docs_analyzed, len(citations))
         return DocumentAnalysis(
             summary=data.get("summary", ""),
             key_findings=data.get("key_findings", []),
