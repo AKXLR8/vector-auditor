@@ -25,7 +25,8 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app/models/embedding_model.pkl models/embedding_model.pkl
 
-COPY alembic.ini alembic/ ./
+COPY alembic.ini ./
+COPY alembic ./alembic
 COPY src/ src/
 
 ENV PYTHONPATH=/app \
@@ -38,7 +39,7 @@ EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')" || exit 1
 
-CMD alembic upgrade head 2>/dev/null; \
+CMD alembic upgrade head || echo "alembic skipped (in-memory fallback)"; \
     exec uvicorn src.api.main:app \
         --host 0.0.0.0 \
         --port 7860 \
