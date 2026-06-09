@@ -44,20 +44,10 @@ def download_reranker():
     if target.exists():
         logger.info("Reranker PKL already exists, skipping")
         return
-    logger.info("Downloading BAAI/bge-reranker-v2-m3 ...")
-    from sentence_transformers import CrossEncoder
-    t0 = time.monotonic()
-    model = CrossEncoder("BAAI/bge-reranker-v2-m3")
-    logger.info("Reranker ready in %.2fs", time.monotonic() - t0)
-
-    import joblib
-    t1 = time.monotonic()
-    joblib.dump(model, str(target), compress=3)
-    raw_mb = target.stat().st_size / (1024 * 1024)
-    logger.info("PKL written to %s (%.1f MB) in %.2fs", target, raw_mb, time.monotonic() - t1)
-
-    del model
-    gc.collect()
+    # Skip build-time caching — the reranker is ~1.1 GB and causes OOM during
+    # serialization in the constrained build environment. It will lazy-load at
+    # runtime (16 GB RAM available) via _ensure_reranker() in Qdrant.py.
+    logger.info("Skipping reranker pre-cache (lazy-loaded at runtime)")
 
 
 def main() -> None:

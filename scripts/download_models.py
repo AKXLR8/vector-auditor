@@ -22,13 +22,10 @@ def download_embedding_model():
 
 
 def download_reranker():
-    from sentence_transformers import CrossEncoder
-
-    logger.info("Downloading BAAI/bge-reranker-v2-m3...")
-    model = CrossEncoder("BAAI/bge-reranker-v2-m3")
-    path = MODELS_DIR / "reranker.pkl"
-    joblib.dump(model, str(path), compress=True)
-    logger.info("Saved -> %s (%.1f MB)", path, path.stat().st_size / 1e6)
+    # Skip build-time caching — the reranker is ~1.1 GB and causes OOM during
+    # serialization in the constrained build environment. It will lazy-load at
+    # runtime (16 GB RAM available) via _ensure_reranker() in Qdrant.py.
+    logger.info("Skipping reranker pre-cache (lazy-loaded at runtime)")
 
 
 def main():
