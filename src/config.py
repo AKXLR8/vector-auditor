@@ -62,7 +62,7 @@ class Settings(BaseSettings):
 
     # ── Optional integrations ─────────────────────────────
     redis_url: str = Field(default="", alias="REDIS_URL")
-    pii_enabled: bool = Field(default=False, alias="PII_ENABLED")
+    pii_enabled: bool = Field(default=True, alias="PII_ENABLED")
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
     qdrant_api_key: Optional[str] = Field(default=None, alias="QDRANT_API_KEY")
 
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     max_document_hops: int = Field(default=3, alias="MAX_DOCUMENT_HOPS")
     max_citations_per_doc: int = Field(default=6, alias="MAX_CITATIONS_PER_DOC")
     max_citations_total: int = Field(default=20, alias="MAX_CITATIONS_TOTAL")
-    retrieve_k_per_query: int = Field(default=10, alias="RETRIEVE_K_PER_QUERY")
+    retrieve_k_per_query: int = Field(default=20, alias="RETRIEVE_K_PER_QUERY")
 
     # ── Database ──────────────────────────────────────────
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")

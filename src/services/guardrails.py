@@ -8,7 +8,7 @@ import yaml
 
 logger = logging.getLogger("rga_auditor.guardrails")
 
-_PII_ENABLED = os.getenv("PII_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+_PII_ENABLED = os.getenv("PII_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
 
 class Guardrails:

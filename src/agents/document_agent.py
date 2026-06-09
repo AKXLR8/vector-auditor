@@ -55,13 +55,15 @@ class DocumentAgent:
         max_citations_per_doc: Optional[int] = None,
         max_citations_total: Optional[int] = None,
         retrieve_k: Optional[int] = None,
+        rerank_top_k: Optional[int] = None,
     ) -> None:
         self.llm = llm or get_llm()
         self.vs = vector_store or get_vector_store()
         self.max_hops = max_hops or int(os.getenv("MAX_DOCUMENT_HOPS", "3"))
         self.max_citations_per_doc = max_citations_per_doc or int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
         self.max_citations_total = max_citations_total or int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
-        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "10"))
+        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "20"))
+        self.rerank_top_k = rerank_top_k or int(os.getenv("RERANK_TOP_K", "5"))
 
     def _per_doc_caps(self, override: Optional[int]) -> int:
         return min(self.max_citations_per_doc, override or self.max_citations_per_doc)
@@ -142,6 +144,16 @@ class DocumentAgent:
         lines.append("\n*Please retry shortly when the LLM service is restored for a synthesized answer.*")
         return "\n".join(lines)
 
+    async def _rerank_citations(self, question: str, citations: list[Citation], top_k: int) -> list[Citation]:
+        if not citations:
+            return citations
+        candidates = [{"text": c.quote} for c in citations]
+        reranked = await self.vs.rerank(question, candidates, top_k)
+        kept = {c["text"] for c in reranked}
+        result = [c for c in citations if c.quote in kept]
+        logger.info("_rerank_citations: %d → %d after reranking", len(citations), len(result))
+        return result
+
     async def _verify(self, question: str, answer: str, context: list[Citation]) -> str:
         if not context:
             return "no context to verify against"
@@ -211,6 +223,7 @@ class DocumentAgent:
             else:
                 break
         all_citations = self._truncate_citations(all_citations)
+        all_citations = await self._rerank_citations(req.question, all_citations, self.rerank_top_k)
 
         reasoning_path: list[str] = []
         if req.mode == Mode.white_box:
@@ -285,6 +298,7 @@ class DocumentAgent:
                 else:
                     break
             all_citations = self._truncate_citations(all_citations)
+            all_citations = await self._rerank_citations(req.question, all_citations, self.rerank_top_k)
 
             reasoning_path: list[str] = []
             if req.mode == Mode.white_box:
@@ -392,7 +406,8 @@ class DocumentAgent:
             citations = await self._retrieve(user_id, question or "key findings and methodology", req_doc_ids or None,
                                               min(self.retrieve_k * 2, 20))
         citations = self._truncate_citations(citations)
-        logger.info("analyze_document: total citations after truncation=%d", len(citations))
+        citations = await self._rerank_citations(question or "key findings and methodology", citations, self.rerank_top_k)
+        logger.info("analyze_document: total citations after truncation+rerank=%d", len(citations))
         if not citations:
             logger.info("analyze_document: no citations found, returning empty")
             return DocumentAnalysis(

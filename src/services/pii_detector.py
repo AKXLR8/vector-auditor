@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger("rga_auditor.pii")
 
-PII_ENABLED = os.getenv("PII_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+PII_ENABLED = os.getenv("PII_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
 
 class PIIDetector:

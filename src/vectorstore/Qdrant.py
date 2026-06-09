@@ -1,11 +1,14 @@
-"""Qdrant vector store with user-isolated collections + circuit breaker."""
+"""Qdrant vector store with user-isolated collections + circuit breaker + cross-encoder reranker."""
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import uuid
 from pathlib import Path
 from typing import Optional
 
+from ..services.cache import CACHE_TTL, get_cache
 from ..services.circuit_breaker import CircuitBreaker, retry_with_backoff
 
 logger = logging.getLogger("rga_auditor.qdrant")
@@ -14,7 +17,10 @@ MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
 
 DEFAULT_MAX_CITATIONS_PER_DOC = int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
 DEFAULT_MAX_CITATIONS_TOTAL = int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
-DEFAULT_RETRIEVE_K = int(os.getenv("RETRIEVE_K_PER_QUERY", "10"))
+DEFAULT_RETRIEVE_K = int(os.getenv("RETRIEVE_K_PER_QUERY", "20"))
+DEFAULT_RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "5"))
+
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "documents_v2")
 
 
 class VectorStore:
@@ -22,17 +28,18 @@ class VectorStore:
         self,
         qdrant_url: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
-        collection_name: str = "documents",
+        collection_name: str = COLLECTION_NAME,
     ) -> None:
         from qdrant_client import QdrantClient
         from sentence_transformers import SentenceTransformer
         from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         self.collection_name = collection_name
-        self.splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
-        self.embedding_dim = 384
+        self.splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        self.embedding_dim = 768
         self._search_cb = CircuitBreaker(name="qdrant_search", failure_threshold=5, recovery_timeout_s=30.0)
         self._index_cb = CircuitBreaker(name="qdrant_index", failure_threshold=3, recovery_timeout_s=60.0)
+        self._reranker = None
 
         url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
         key = qdrant_api_key or os.getenv("QDRANT_API_KEY") or None
@@ -57,14 +64,38 @@ class VectorStore:
             self._model = joblib.load(str(pkl))
             logger.info("VectorStore: loaded embedding model from %s in %.2fs", pkl, time.monotonic() - t0)
         else:
-            logger.info("VectorStore: pickle not found at %s — downloading all-MiniLM-L6-v2", pkl)
-            self._model = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("VectorStore: pickle not found at %s — downloading all-mpnet-base-v2", pkl)
+            self._model = SentenceTransformer("all-mpnet-base-v2")
             logger.info("VectorStore: model downloaded in %.2fs", time.monotonic() - t0)
+
+    def _ensure_reranker(self):
+        if self._reranker is not None:
+            return
+        import time
+        t0 = time.monotonic()
+        from sentence_transformers import CrossEncoder
+        pkl = MODELS_DIR / "reranker.pkl"
+        if pkl.exists():
+            import joblib
+            self._reranker = joblib.load(str(pkl))
+            logger.info("VectorStore: loaded reranker from %s in %.2fs", pkl, time.monotonic() - t0)
+        else:
+            logger.info("VectorStore: pickle not found at %s — downloading BAAI/bge-reranker-v2-m3", pkl)
+            self._reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
+            logger.info("VectorStore: reranker downloaded in %.2fs", time.monotonic() - t0)
 
     def _create_collection(self) -> None:
         from qdrant_client.http import models
         try:
-            self.client.get_collection(self.collection_name)
+            col = self.client.get_collection(self.collection_name)
+            if col.config.params.vectors.size != self.embedding_dim:
+                logger.warning("Collection %s has dim %d, need %d — recreating",
+                               self.collection_name, col.config.params.vectors.size, self.embedding_dim)
+                self.client.delete_collection(self.collection_name)
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=models.VectorParams(size=self.embedding_dim, distance=models.Distance.COSINE),
+                )
         except Exception:
             self.client.create_collection(
                 collection_name=self.collection_name,
@@ -190,6 +221,21 @@ class VectorStore:
             for r in resp.points
         ]
 
+    async def rerank(self, query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
+        if not candidates:
+            return candidates
+        self._ensure_reranker()
+        import time
+        t0 = time.monotonic()
+        pairs = [(query, c.get("text", "")) for c in candidates]
+        from ..services.async_worker import run_sync
+        scores = await run_sync(self._reranker.predict, pairs)
+        for i, c in enumerate(candidates):
+            c["rerank_score"] = float(scores[i])
+        candidates.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
+        logger.info("Qdrant.rerank: reranked %d candidates → top %d in %.2fs", len(candidates), top_k, time.monotonic() - t0)
+        return candidates[:top_k]
+
     async def search(
         self,
         user_id: str,
@@ -197,7 +243,17 @@ class VectorStore:
         k: int = 10,
         document_ids: Optional[list[str]] = None,
     ) -> list[dict]:
-        return await self._search_cb.call(self._do_search, user_id, query, k, document_ids)
+        cache = get_cache()
+        doc_ids_sorted = sorted(document_ids) if document_ids else []
+        raw_key = json.dumps({"user_id": user_id, "query": query, "doc_ids": doc_ids_sorted, "k": k}, sort_keys=True)
+        cache_key = "search:" + hashlib.sha256(raw_key.encode()).hexdigest()
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            logger.info("Qdrant.search: cache hit for query=%.80s", query)
+            return cached
+        results = await self._search_cb.call(self._do_search, user_id, query, k, document_ids)
+        await cache.set(cache_key, results, CACHE_TTL.get("query_result", 600))
+        return results
 
     def delete_document(self, user_id: str, document_id: str) -> None:
         from qdrant_client.http import models

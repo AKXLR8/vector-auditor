@@ -24,6 +24,7 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app/models/embedding_model.pkl models/embedding_model.pkl
+COPY --from=builder /app/models/reranker.pkl models/reranker.pkl
 
 COPY alembic.ini ./
 COPY alembic ./alembic
@@ -43,7 +44,7 @@ CMD alembic upgrade head || echo "alembic skipped (in-memory fallback)"; \
     exec uvicorn src.api.main:app \
         --host 0.0.0.0 \
         --port 7860 \
-        --workers 2 \
+        --workers 4 \
         --loop asyncio \
         --http httptools \
         --no-access-log
