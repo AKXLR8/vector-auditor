@@ -31,6 +31,11 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 ## Architecture
 ---
 ```mermaid
+---
+config:
+  layout: elk
+  theme: neo-dark
+---
 graph TB
   subgraph Clients
     User["User Browser"]
