@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY scripts/ scripts/
-RUN python scripts/download_model.py
+RUN python scripts/download_model.py || echo "WARNING: model pre-cache failed (will lazy-load at runtime)"
 
 FROM python:3.11-slim
 
@@ -23,8 +23,7 @@ WORKDIR /app
 
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
-COPY --from=builder /app/models/embedding_model.pkl models/embedding_model.pkl
-COPY --from=builder /app/models/reranker.pkl models/reranker.pkl
+COPY --from=builder /app/models models/
 
 COPY alembic.ini ./
 COPY alembic ./alembic

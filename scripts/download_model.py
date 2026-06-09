@@ -1,4 +1,6 @@
-"""Download the embedding model + cross-encoder reranker and save as compressed PKLs."""
+"""Download the embedding model + cross-encoder reranker and save as compressed PKLs.
+Memory-safe: frees each model before loading the next."""
+import gc
 import logging
 import time
 from pathlib import Path
@@ -11,6 +13,9 @@ MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 def download_embedding():
     target = MODELS_DIR / "embedding_model.pkl"
+    if target.exists():
+        logger.info("Embedding PKL already exists, skipping")
+        return
     logger.info("Downloading all-mpnet-base-v2 ...")
     from sentence_transformers import SentenceTransformer
     t0 = time.monotonic()
@@ -23,14 +28,22 @@ def download_embedding():
     raw_mb = target.stat().st_size / (1024 * 1024)
     logger.info("PKL written to %s (%.1f MB) in %.2fs", target, raw_mb, time.monotonic() - t1)
 
+    # Verify loads back
     t2 = time.monotonic()
     loaded = joblib.load(str(target))
     test_vec = loaded.encode(["test sentence"], batch_size=128, show_progress_bar=False)
     logger.info("Verification encode OK (dim=%d) in %.2fs", len(test_vec[0]), time.monotonic() - t2)
 
+    # Free memory before next download
+    del model, loaded, test_vec
+    gc.collect()
+
 
 def download_reranker():
     target = MODELS_DIR / "reranker.pkl"
+    if target.exists():
+        logger.info("Reranker PKL already exists, skipping")
+        return
     logger.info("Downloading BAAI/bge-reranker-v2-m3 ...")
     from sentence_transformers import CrossEncoder
     t0 = time.monotonic()
@@ -42,6 +55,9 @@ def download_reranker():
     joblib.dump(model, str(target), compress=3)
     raw_mb = target.stat().st_size / (1024 * 1024)
     logger.info("PKL written to %s (%.1f MB) in %.2fs", target, raw_mb, time.monotonic() - t1)
+
+    del model
+    gc.collect()
 
 
 def main() -> None:
