@@ -22,15 +22,22 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 
 ## Features
 
-- **RAG with citations** — multi-hop retrieval → LLM generation → verification → gap analysis
-- **Two modes**: `white_box` (full reasoning path) and `black_box` (temperature=0, terse)
-- **Parallel uploads** — 5 concurrent jobs with SHA256 dedup
-- **Page-level citations** — retrieved from pdfplumber, mapped to Qdrant chunks
-- **Graceful degradation** — circuit breakers on LLM, Qdrant, embedding; fallback to raw context when LLM is down
-- **Guardrails + PII detection** — NeMo Guardrails (with regex fallback) + Presidio PII (opt-in)
+- **Semantic Search** — `all-mpnet-base-v2` embeddings (768-d) for meaning-based retrieval
+- **Cross-Encoder Reranker** — `BAAI/bge-reranker-v2-m3` re-scores 20 candidates → top 5 before LLM
+- **Cited Grounding** — inline `[N]` markers with page-level citations from pdfplumber, click to jump
+- **Section-Aware Chunking** — 1000-char windows with 200-char overlap, split by markdown headers
+- **Multi-Document Q&A** — select any subset of uploaded PDFs, scoped answers
+- **AI-Powered Answers** — Inception Labs Mercury-2 via OpenAI-compatible endpoint, strict source grounding
+- **PII Redaction** — Presidio analyzer scans all uploads (enabled by default)
+- **Multi-Hop Retrieval** — iterative search across 3 hops for comprehensive coverage
+- **Two modes** — `white_box` (full reasoning + verification + gap analysis) and `black_box` (temperature=0)
+- **Parallel uploads** — 5 concurrent jobs with SHA256 dedup & Cloudinary storage
+- **Graceful degradation** — circuit breakers on LLM, Qdrant, embedding; raw-context fallback when LLM is down
+- **LRU query cache** — repeated queries skip embedding + vector search (600s TTL)
+- **Guardrails** — NeMo Guardrails with regex fallback for prompt injection detection
 - **Dead letter queue** — failed uploads captured for replay
 - **Streaming SSE** — `citations` / `token` / `verification` / `gap_analysis` / `done` / `error`
-- **Multi-user** — JWT auth, document isolation per user
+- **Multi-user** — JWT auth with GitHub OAuth, document isolation per user
 - **Feedback loop** — thumbs up/down per query
 - **Observability** — JSON structured logs, Prometheus `/metrics`, health `/health`, readiness `/readyz`
 
@@ -49,7 +56,7 @@ graph TB
     FE["Frontend (separate repo)"]
   end
 
-  subgraph "HF Spaces (Docker, 2 workers)"
+  subgraph "HF Spaces (Docker, 4 workers)"
     API["FastAPI App<br/>src/api/main.py"]
     MW["Middleware<br/>Logging · CORS · Auth"]
     Auth["Auth Service<br/>JWT · GitHub OAuth"]
@@ -60,17 +67,18 @@ graph TB
     Parser["Document Parser<br/>MarkItDown + pdfplumber"]
     PII["PII Detection<br/>presidio-analyzer"]
     Cloud["Cloudinary<br/>raw file storage"]
-    Chunker["Text Chunker<br/>RecursiveCharacterTextSplitter<br/>1000 chars · 50 overlap"]
+    Chunker["Text Chunker<br/>RecursiveCharacterTextSplitter<br/>1000 chars · 200 overlap"]
   end
 
   subgraph "Vector Store"
     Qdrant["Qdrant Cloud<br/>Vector DB"]
-    Embedder["Embedding Model<br/>all-MiniLM-L6-v2"]
+    Embedder["Embedding Model<br/>all-mpnet-base-v2 (768d)"]
     CB_Q["Circuit Breaker<br/>search: 5/30s · index: 3/60s"]
   end
 
   subgraph "LLM / RAG"
     Agent["Document Agent<br/>src/agents/document_agent.py"]
+    Reranker["Cross-Encoder Reranker<br/>BAAI/bge-reranker-v2-m3"]
     LLM["LLM Service<br/>Mercury-2 via Inception Labs"]
     CB_L["Circuit Breaker<br/>5 failures / 30s recovery"]
     Retry["Retry w/ Backoff<br/>0.5s → 1s → 2s"]
@@ -83,6 +91,7 @@ graph TB
     Redis[("Redis<br/>(session cache)")]
     JobQ["Job Queue<br/>max_concurrent=5"]
     Metrics["Prometheus Metrics"]
+    Cache["LRU Query Cache<br/>TTLCache 600s"]
     Shutdown["Graceful Shutdown"]
     TokenCounter["Token Counter"]
   end
@@ -99,6 +108,8 @@ graph TB
 
   API --> Agent
   Agent --> Qdrant
+  Agent --> Reranker
+  Reranker --> LLM
   Agent --> LLM
   LLM --> CB_L --> Degrade
   LLM --> Retry
@@ -122,8 +133,8 @@ graph TB
   class API,MW,Auth,Rate api
   class Parser,PII,Cloud,Chunker process
   class Qdrant,Embedder,CB_Q vector
-  class Agent,LLM,CB_L,Retry,Guard,Degrade llm
-  class PG,Redis,JobQ,Metrics,Shutdown,TokenCounter infra
+  class Agent,Reranker,LLM,CB_L,Retry,Guard,Degrade llm
+  class PG,Redis,JobQ,Metrics,Cache,Shutdown,TokenCounter infra
 ```
 
 
@@ -134,17 +145,17 @@ graph TB
 | API | FastAPI + Uvicorn + Pydantic v2 |
 | Auth | JWT (python-jose) + bcrypt |
 | Database | PostgreSQL (SQLAlchemy async) / in-memory JSONL fallback |
-| Vector Store | Qdrant (Cloud / local / in-memory) |
-| Embeddings | SentenceTransformers all-MiniLM-L6-v2 |
+| Vector Store | Qdrant (Cloud / local / in-memory, collection `documents_v2`) |
+| Reranker | Cross-Encoder BAAI/bge-reranker-v2-m3 |
+| Embeddings | SentenceTransformers all-mpnet-base-v2 (768-d) |
 | LLM | OpenAI-compatible (Inception Labs mercury-2) |
 | Cache | Redis / in-process TTLCache |
 | File Store | Cloudinary (PDF serving) |
 | PDF Parse | MarkItDown (text) + pdfplumber (page numbers) |
-| Resilience | Circuit breakers + exponential backoff retry |
+| Resilience | Circuit breakers + exponential backoff retry + LRU query cache |
 | Observability | JSON logs + Prometheus |
 | Rate Limiting | slowapi (200/min default) |
-
-## Quick Start
+| Workers | 4 uvicorn workers |
 
 ```bash
 # Clone
@@ -226,7 +237,7 @@ docker run -p 7860:7860 -e LLM_API_KEY=... -e JWT_SECRET_KEY=... vector-auditor
 - [x] JSON structured logging
 - [x] Prometheus metrics
 - [x] Dead letter queue for failed uploads
-- [x] PII detection (opt-in)
+- [x] PII detection (enabled by default)
 - [x] Guardrails against prompt injection
 - [x] JWT auth with role-based access
 - [x] Document isolation per user
