@@ -525,8 +525,11 @@ def create_app() -> FastAPI:
                     return False
                 try:
                     text_sample = content[:100_000].decode("utf-8", errors="ignore")
-                    return bool(pii_detector.detect(text_sample))
-                except Exception:
+                    result = bool(pii_detector.detect(text_sample))
+                    logger.info("PII: scan result for %s = %s (sample=%d chars)", safe, result, len(text_sample))
+                    return result
+                except Exception as e:
+                    logger.warning("PII: scan failed for %s: %s", safe, e)
                     return False
 
             digest, has_pii = await asyncio.gather(
