@@ -16,10 +16,10 @@ def download_embedding():
     if target.exists():
         logger.info("Embedding PKL already exists, skipping")
         return
-    logger.info("Downloading all-mpnet-base-v2 ...")
+    logger.info("Downloading all-MiniLM-L6-v2 ...")
     from sentence_transformers import SentenceTransformer
     t0 = time.monotonic()
-    model = SentenceTransformer("all-mpnet-base-v2")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
     logger.info("Model ready in %.2fs", time.monotonic() - t0)
 
     import joblib

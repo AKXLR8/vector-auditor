@@ -513,9 +513,8 @@ def create_app() -> FastAPI:
             upload_id = uuid.uuid4().hex
             target = UPLOAD_DIR / f"{doc_id}_{safe}"
 
-            # 2. Write to disk + compute SHA256 + PII + Cloudinary — all in parallel
+            # 2. Write to disk + compute SHA256 + PII (Cloudinary is async in job worker)
             pii_detector = get_pii_detector()
-            cli = get_cloudinary()
 
             async def _write_and_hash() -> str:
                 target.write_bytes(content)
@@ -530,23 +529,8 @@ def create_app() -> FastAPI:
                 except Exception:
                     return False
 
-            async def _cloudinary_upload() -> tuple[Optional[str], Optional[str]]:
-                if not cli:
-                    return None, None
-                try:
-                    res = cli.upload(content, public_id=f"{user['id']}/{doc_id}")
-                    if isinstance(res, dict):
-                        cu = res.get("secure_url") or res.get("url")
-                        cpid = res.get("public_id")
-                        logger.info("CLOUDINARY: uploaded %s → %s (type=%s)", safe, cu, res.get("resource_type"))
-                        return cu, cpid
-                    logger.warning("CLOUDINARY: upload response not a dict for %s", safe)
-                except Exception as e:
-                    logger.warning("CLOUDINARY: upload failed for %s: %s", safe, e)
-                return None, None
-
-            digest, has_pii, (cloudinary_url, cloudinary_public_id) = await asyncio.gather(
-                _write_and_hash(), _detect_pii(), _cloudinary_upload(),
+            digest, has_pii = await asyncio.gather(
+                _write_and_hash(), _detect_pii(),
             )
 
             # 3. Dedup check
@@ -568,8 +552,6 @@ def create_app() -> FastAPI:
                     uploaded_by=user["id"],
                     filename=safe,
                     status=status,
-                    cloudinary_url=cloudinary_url,
-                    cloudinary_public_id=cloudinary_public_id,
                     sha256=digest,
                     has_pii=has_pii,
                 )
@@ -957,6 +939,21 @@ def set_upload_processor() -> None:
             if sf is not None:
                 async with sf() as s:
                     await update_document(s, record.document_id, status="success")
+            # Fire-and-forget Cloudinary upload
+            cli = get_cloudinary()
+            if cli:
+                try:
+                    public_id = f"{record.user_id}/{record.document_id}"
+                    res = cli.upload(content, public_id=public_id)
+                    if isinstance(res, dict):
+                        cu = res.get("secure_url") or res.get("url")
+                        cpid = res.get("public_id")
+                        if sf is not None:
+                            async with sf() as s2:
+                                await update_document(s2, record.document_id, cloudinary_url=cu, cloudinary_public_id=cpid)
+                        logger.info("CLOUDINARY: uploaded %s → %s", record.filename, cu)
+                except Exception as e:
+                    logger.warning("CLOUDINARY: upload failed for %s: %s", record.filename, e)
             get_metrics().uploads_total.labels(status="ok").inc()
             logger.info("UPLOAD: completed %s in %.2fs", record.id, time.time() - _t0)
         except Exception as e:

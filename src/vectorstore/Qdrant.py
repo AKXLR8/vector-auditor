@@ -8,6 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from cachetools import TTLCache
+
 from ..services.cache import CACHE_TTL, get_cache
 from ..services.circuit_breaker import CircuitBreaker, retry_with_backoff
 
@@ -17,10 +19,10 @@ MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
 
 DEFAULT_MAX_CITATIONS_PER_DOC = int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
 DEFAULT_MAX_CITATIONS_TOTAL = int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
-DEFAULT_RETRIEVE_K = int(os.getenv("RETRIEVE_K_PER_QUERY", "20"))
+DEFAULT_RETRIEVE_K = int(os.getenv("RETRIEVE_K_PER_QUERY", "10"))
 DEFAULT_RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "5"))
 
-COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "documents_v2")
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "documents")
 
 
 class VectorStore:
@@ -36,10 +38,11 @@ class VectorStore:
 
         self.collection_name = collection_name
         self.splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        self.embedding_dim = 768
+        self.embedding_dim = 384
         self._search_cb = CircuitBreaker(name="qdrant_search", failure_threshold=5, recovery_timeout_s=30.0)
         self._index_cb = CircuitBreaker(name="qdrant_index", failure_threshold=3, recovery_timeout_s=60.0)
         self._reranker = None
+        self._query_embed_cache = TTLCache(maxsize=128, ttl=300)
 
         url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
         key = qdrant_api_key or os.getenv("QDRANT_API_KEY") or None
@@ -53,6 +56,7 @@ class VectorStore:
             self._create_collection()
 
         self._load_model()
+        self._ensure_reranker()
 
     def _load_model(self) -> None:
         import time
@@ -64,8 +68,8 @@ class VectorStore:
             self._model = joblib.load(str(pkl))
             logger.info("VectorStore: loaded embedding model from %s in %.2fs", pkl, time.monotonic() - t0)
         else:
-            logger.info("VectorStore: pickle not found at %s — downloading all-mpnet-base-v2", pkl)
-            self._model = SentenceTransformer("all-mpnet-base-v2")
+            logger.info("VectorStore: pickle not found at %s — downloading all-MiniLM-L6-v2", pkl)
+            self._model = SentenceTransformer("all-MiniLM-L6-v2")
             logger.info("VectorStore: model downloaded in %.2fs", time.monotonic() - t0)
 
     def _ensure_reranker(self):
@@ -193,7 +197,13 @@ class VectorStore:
         from ..services.async_worker import run_sync
         from qdrant_client.http import models
 
-        vec = await _run_embedding(self._model, [query])
+        embed_key = hashlib.sha256(query.encode()).hexdigest()
+        cached = self._query_embed_cache.get(embed_key)
+        if cached is not None:
+            vec = cached
+        else:
+            vec = await _run_embedding(self._model, [query])
+            self._query_embed_cache[embed_key] = vec
         flt = models.Filter(must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))])
         if document_ids:
             flt.must.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))

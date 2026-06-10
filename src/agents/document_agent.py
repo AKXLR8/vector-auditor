@@ -62,7 +62,7 @@ class DocumentAgent:
         self.max_hops = max_hops or int(os.getenv("MAX_DOCUMENT_HOPS", "3"))
         self.max_citations_per_doc = max_citations_per_doc or int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
         self.max_citations_total = max_citations_total or int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
-        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "20"))
+        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "10"))
         self.rerank_top_k = rerank_top_k or int(os.getenv("RERANK_TOP_K", "5"))
 
     def _per_doc_caps(self, override: Optional[int]) -> int:
