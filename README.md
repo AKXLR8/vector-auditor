@@ -1,11 +1,4 @@
----
-title: Vector Auditor
-emoji: 🔍
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-pinned: false
----
+
 
 # Vector Auditor
 
