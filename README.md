@@ -11,6 +11,22 @@ pinned: false
 
 **Agentic document intelligence** — upload PDFs, ask questions, get cited answers with page-level citations.
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11"/>
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI"/>
+  <img src="https://img.shields.io/badge/PostgreSQL-17-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL"/>
+  <img src="https://img.shields.io/badge/Qdrant-Cloud-7B1FA2?style=for-the-badge&logo=qdrant&logoColor=white" alt="Qdrant"/>
+  <img src="https://img.shields.io/badge/Redis-7-FF4438?style=for-the-badge&logo=redis&logoColor=white" alt="Redis"/>
+  <img src="https://img.shields.io/badge/Docker-24-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker"/>
+  <img src="https://img.shields.io/badge/HuggingFace-Spaces-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="HuggingFace Spaces"/>
+  <img src="https://img.shields.io/badge/Prometheus-0.53-E6522C?style=for-the-badge&logo=prometheus&logoColor=white" alt="Prometheus"/>
+  <img src="https://img.shields.io/badge/SentenceTransformers-MiniLM-FF6F00?style=for-the-badge&logo=huggingface&logoColor=white" alt="SentenceTransformers"/>
+  <img src="https://img.shields.io/badge/Presidio-PII-00ACC1?style=for-the-badge&logo=microsoft&logoColor=white" alt="Presidio PII"/>
+  <img src="https://img.shields.io/badge/Cloudinary-3448C5?style=for-the-badge&logo=cloudinary&logoColor=white" alt="Cloudinary"/>
+  <img src="https://img.shields.io/badge/JWT-Auth-000000?style=for-the-badge&logo=jsonwebtokens&logoColor=white" alt="JWT Auth"/>
+  <img src="https://img.shields.io/badge/GitHub-OAuth-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub OAuth"/>
+</p>
+
 A FastAPI backend with a lite RAG pipeline (no LangChain), Qdrant vector store, Postgres persistence, Redis caching, and circuit-breaker resilience.
 
 ## Demo
@@ -22,8 +38,8 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 
 ## Features
 
-- **Semantic Search** — `all-mpnet-base-v2` embeddings (768-d) for meaning-based retrieval
-- **Cross-Encoder Reranker** — `BAAI/bge-reranker-v2-m3` re-scores 20 candidates → top 5 before LLM
+- **Semantic Search** — `all-MiniLM-L6-v2` embeddings (384-d) for meaning-based retrieval
+- **Cross-Encoder Reranker** — `BAAI/bge-reranker-v2-m3` re-scores 10 candidates → top 5 before LLM
 - **Cited Grounding** — inline `[N]` markers with page-level citations from pdfplumber, click to jump
 - **Section-Aware Chunking** — 1000-char windows with 200-char overlap, split by markdown headers
 - **Multi-Document Q&A** — select any subset of uploaded PDFs, scoped answers
@@ -72,7 +88,7 @@ graph TB
 
   subgraph "Vector Store"
     Qdrant["Qdrant Cloud<br/>Vector DB"]
-    Embedder["Embedding Model<br/>all-mpnet-base-v2 (768d)"]
+    Embedder["Embedding Model<br/>all-MiniLM-L6-v2 (384d)"]
     CB_Q["Circuit Breaker<br/>search: 5/30s · index: 3/60s"]
   end
 
@@ -145,9 +161,9 @@ graph TB
 | API | FastAPI + Uvicorn + Pydantic v2 |
 | Auth | JWT (python-jose) + bcrypt |
 | Database | PostgreSQL (SQLAlchemy async) / in-memory JSONL fallback |
-| Vector Store | Qdrant (Cloud / local / in-memory, collection `documents_v2`) |
+| Vector Store | Qdrant (Cloud / local / in-memory, collection `documents`) |
 | Reranker | Cross-Encoder BAAI/bge-reranker-v2-m3 |
-| Embeddings | SentenceTransformers all-mpnet-base-v2 (768-d) |
+| Embeddings | SentenceTransformers all-MiniLM-L6-v2 (384-d) |
 | LLM | OpenAI-compatible (Inception Labs mercury-2) |
 | Cache | Redis / in-process TTLCache |
 | File Store | Cloudinary (PDF serving) |
