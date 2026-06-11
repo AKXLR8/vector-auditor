@@ -481,6 +481,11 @@ def create_app() -> FastAPI:
     @limiter.limit("10/minute")
     async def analyze(request: Request, body: AnalyzeRequest, user=Depends(current_user)):
         from ..services.llm import LLMError
+        allowed, refusal, pii = await get_guardrails().check_input(body.question)
+        if pii:
+            logger.info("PII entities in analyze: %s", [{k: v for k, v in e.items() if k != "text"} for e in pii])
+        if not allowed:
+            raise HTTPException(status_code=400, detail=refusal or "blocked by guardrails")
         logger.info("ANALYZE request: user=%s question=%r doc_ids=%s max_cit=%s",
                      user["id"], body.question, body.document_ids, body.max_citations)
         agent = _get_agent()
