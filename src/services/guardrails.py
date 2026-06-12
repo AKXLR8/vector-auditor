@@ -203,7 +203,7 @@ class Guardrails:
             logger.warning("PII anonymize failed: %s", e)
             return text
 
-    async def check_input(self, text: str) -> tuple[bool, Optional[str], list[dict]]:
+    async def check_input(self, text: Optional[str]) -> tuple[bool, Optional[str], list[dict]]:
         """Returns (allowed, refusal_reason, pii_entities)."""
         pii_entities = self.check_pii(text)
         if pii_entities:
@@ -214,7 +214,9 @@ class Guardrails:
             return False, reason, pii_entities
         return True, None, pii_entities
 
-    def _fallback_check(self, text: str) -> tuple[bool, Optional[str]]:
+    def _fallback_check(self, text: Optional[str]) -> tuple[bool, Optional[str]]:
+        if not text:
+            return True, None
         if len(text) > 20_000:
             return False, "input too long"
 
