@@ -17,7 +17,7 @@ logger = logging.getLogger("rga_auditor.jobs")
 
 PROCESSOR_TIMEOUT_S = float(os.getenv("JOB_PROCESSOR_TIMEOUT", "300"))
 WORKER_POLL_INTERVAL_S = float(os.getenv("JOB_POLL_INTERVAL", "1.0"))
-MAX_CONCURRENT_JOBS = int(os.getenv("JOB_MAX_CONCURRENT", "5"))
+MAX_CONCURRENT_JOBS = int(os.getenv("JOB_MAX_CONCURRENT", "10"))
 
 # Allowed stages
 STAGE_UPLOADING = "uploading"

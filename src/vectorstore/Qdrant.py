@@ -175,12 +175,12 @@ class VectorStore:
         ]
 
         t2 = time.monotonic()
-        BATCH_SIZE = 500
+        BATCH_SIZE = 2000
         total = len(points)
         tasks = []
         for i in range(0, total, BATCH_SIZE):
             batch = points[i:i+BATCH_SIZE]
-            tasks.append(run_sync(self.client.upsert, collection_name=self.collection_name, points=batch, wait=True))
+            tasks.append(run_sync(self.client.upsert, collection_name=self.collection_name, points=batch, wait=False))
         if tasks:
             await asyncio.gather(*tasks)
         logger.info("VectorStore.add_document: upserted %d points in %d parallel batches in %.2fs (total %.2fs)",
