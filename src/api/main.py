@@ -108,7 +108,6 @@ from ..services.cache import get_cache
 from ..services.cloudinary import get_cloudinary
 from ..services.document_parser import parse_document
 from ..services.guardrails import get_guardrails
-from ..services.pii_detector import get_pii_detector
 from ..vectorstore.Qdrant import get_vector_store
 from ..version import DESCRIPTION, TITLE, VERSION
 from .auth import (
@@ -518,28 +517,12 @@ def create_app() -> FastAPI:
             upload_id = uuid.uuid4().hex
             target = UPLOAD_DIR / f"{doc_id}_{safe}"
 
-            # 2. Write to disk + compute SHA256 + PII (Cloudinary is async in job worker)
-            pii_detector = get_pii_detector()
-
+            # 2. Write to disk + compute SHA256 (PII runs in job worker)
             async def _write_and_hash() -> str:
                 target.write_bytes(content)
                 return hashlib.sha256(content).hexdigest()
 
-            async def _detect_pii() -> bool:
-                if not pii_detector or not getattr(pii_detector, "enabled", True):
-                    return False
-                try:
-                    text_sample = content[:100_000].decode("utf-8", errors="ignore")
-                    result = bool(pii_detector.detect(text_sample))
-                    logger.info("PII: scan result for %s = %s (sample=%d chars)", safe, result, len(text_sample))
-                    return result
-                except Exception as e:
-                    logger.warning("PII: scan failed for %s: %s", safe, e)
-                    return False
-
-            digest, has_pii = await asyncio.gather(
-                _write_and_hash(), _detect_pii(),
-            )
+            digest = await _write_and_hash()
 
             # 3. Dedup check
             is_duplicate = False
@@ -561,7 +544,6 @@ def create_app() -> FastAPI:
                     filename=safe,
                     status=status,
                     sha256=digest,
-                    has_pii=has_pii,
                 )
             if not is_duplicate:
                 record = JobRecord(
@@ -918,22 +900,44 @@ def set_upload_processor() -> None:
             await get_worker().queue.update(record.id, stage="extracting", progress=20)
             content = Path(record.content_path).read_bytes()
             _t1 = time.time()
-            text: str
-            page_ranges = None
+            text: str = ""
+            page_ranges: Optional[list] = None
+            has_pii: bool = False
             from ..services.document_parser import parse_document
+
+            # Run PII detection concurrently with document parsing
+            async def _pii_scan() -> bool:
+                from ..services.pii_detector import get_pii_detector
+                pii_detector = get_pii_detector()
+                if not pii_detector or not getattr(pii_detector, "enabled", True):
+                    return False
+                try:
+                    sample = content[:100_000].decode("utf-8", errors="ignore")
+                    result = bool(pii_detector.detect(sample))
+                    logger.info("PII: scan result for %s = %s (sample=%d chars)", record.filename, result, len(sample))
+                    return result
+                except Exception as e:
+                    logger.warning("PII: scan failed for %s: %s", record.filename, e)
+                    return False
+
             name_lower = (record.filename or "").lower()
             if name_lower.endswith(".pdf"):
                 from ..services.document_parser import parse_pdf_with_pages
-                md_text, (pdf_text, pr) = await asyncio.gather(
+                results = await asyncio.gather(
                     asyncio.to_thread(parse_document, record.filename, content),
                     asyncio.to_thread(parse_pdf_with_pages, content),
+                    _pii_scan(),
                 )
-                text = md_text  # MarkItDown quality for embedding
+                md_text, (pdf_text, pr), has_pii = results
+                text = md_text
                 page_ranges = pr
                 logger.info("UPLOAD: parsed PDF %s → %d chars (MarkItDown) + %d pages (pdfplumber) in %.2fs",
                              record.filename, len(text), len(page_ranges or []), time.time() - _t1)
             else:
-                text = parse_document(record.filename, content)
+                text, has_pii = await asyncio.gather(
+                    asyncio.to_thread(parse_document, record.filename, content),
+                    _pii_scan(),
+                )
                 logger.info("UPLOAD: parsed %s → %d chars in %.2fs", record.filename, len(text), time.time() - _t1)
             await get_worker().queue.update(record.id, stage="chunking", progress=40)
             await get_worker().queue.update(record.id, stage="embedding", progress=60)
@@ -946,7 +950,7 @@ def set_upload_processor() -> None:
             sf = get_session_factory()
             if sf is not None:
                 async with sf() as s:
-                    await update_document(s, record.document_id, status="success")
+                    await update_document(s, record.document_id, status="success", has_pii=has_pii)
             # Fire-and-forget Cloudinary upload
             cli = get_cloudinary()
             if cli:
