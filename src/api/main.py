@@ -441,15 +441,23 @@ def create_app() -> FastAPI:
             me = await client.get("https://api.github.com/user", headers={"Authorization": f"Bearer {gh_token}"})
             gh_user = me.json()
         email = gh_user.get("email") or f"{gh_user['id']}@users.noreply.github.com"
-        login_name = gh_user.get("login") or email
+        gh_login = gh_user.get("login") or ""
+        display = gh_user.get("name") or gh_login or email
         sf = get_session_factory()
         async with _maybe_session(sf) as s:
             user = await get_user_by_email(s, email)
             if not user:
-                user = await create_user(s, email=email, hashed_password="", display_name=login_name, roles=["user"])
+                user = await create_user(s, email=email, hashed_password="", username=gh_login, display_name=display, roles=["user"])
         roles = _parse_roles(user.get("roles") or "user")
         token, _expires, _jti = create_access_token(user["id"], roles=roles)
-        return LoginResponse(access_token=token, user_id=user["id"], roles=roles)
+        return LoginResponse(
+            access_token=token,
+            user_id=user["id"],
+            email=user.get("email", ""),
+            username=user.get("username"),
+            display_name=user.get("display_name"),
+            roles=roles,
+        )
 
     # ── Query ─────────────────────────────────────────────────────────────
 
