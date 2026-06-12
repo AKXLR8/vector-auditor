@@ -120,6 +120,7 @@ class Citation(BaseModel):
     location: str
     page: Optional[int] = None
     document_id: Optional[str] = None
+    bboxes: Optional[list[list[float]]] = None
 
 
 class QueryRequest(BaseModel):

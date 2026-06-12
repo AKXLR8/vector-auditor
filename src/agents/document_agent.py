@@ -22,6 +22,7 @@ from ..models.schemas import (
     QueryRequest,
     QueryResponse,
 )
+from ..services.bbox_extractor import extract_bboxes
 from ..services.cache import CACHE_TTL, cache_key, get_cache
 from ..services.circuit_breaker import CircuitBreakerOpenError
 from ..services.llm import LLM, LLMError, get_llm
@@ -154,6 +155,16 @@ class DocumentAgent:
         logger.info("_rerank_citations: %d → %d after reranking", len(citations), len(result))
         return result
 
+    @staticmethod
+    def _enrich_bboxes(citations: list[Citation], upload_dir: str = "uploads") -> list[Citation]:
+        for c in citations:
+            if c.page is None or not c.document_id:
+                continue
+            bboxes = extract_bboxes(c.document_id, c.page, c.quote, upload_dir)
+            if bboxes:
+                c.bboxes = bboxes
+        return citations
+
     async def _verify(self, question: str, answer: str, context: list[Citation]) -> str:
         if not context:
             return "no context to verify against"
@@ -224,6 +235,7 @@ class DocumentAgent:
                 break
         all_citations = self._truncate_citations(all_citations)
         all_citations = await self._rerank_citations(req.question, all_citations, self.rerank_top_k)
+        all_citations = self._enrich_bboxes(all_citations)
 
         reasoning_path: list[str] = []
         if req.mode == Mode.white_box:
@@ -299,6 +311,7 @@ class DocumentAgent:
                     break
             all_citations = self._truncate_citations(all_citations)
             all_citations = await self._rerank_citations(req.question, all_citations, self.rerank_top_k)
+            all_citations = self._enrich_bboxes(all_citations)
 
             reasoning_path: list[str] = []
             if req.mode == Mode.white_box:
@@ -407,6 +420,7 @@ class DocumentAgent:
                                               min(self.retrieve_k * 2, 20))
         citations = self._truncate_citations(citations)
         citations = await self._rerank_citations(question or "key findings and methodology", citations, self.rerank_top_k)
+        citations = self._enrich_bboxes(citations)
         logger.info("analyze_document: total citations after truncation+rerank=%d", len(citations))
         if not citations:
             logger.info("analyze_document: no citations found, returning empty")
