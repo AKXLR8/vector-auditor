@@ -119,7 +119,7 @@ class DocumentAgent:
             answer_tokens = estimate_tokens(cached)
             return cached, prompt_tokens, answer_tokens
         temperature = 0.0 if mode == Mode.black_box else None
-        max_tokens = 3048 if mode == Mode.white_box else None
+        max_tokens = 4096 if mode == Mode.white_box else None
         try:
             answer = await self.llm.chat(prompt, system=sys, temperature=temperature, max_tokens=max_tokens)
             await cache.set(key, answer, CACHE_TTL["llm_response"])
@@ -333,7 +333,7 @@ class DocumentAgent:
             total_tokens = prompt_tokens
             answer_buf: list[str] = []
             temperature = 0.0 if req.mode == Mode.black_box else None
-            max_tokens = 3048 if req.mode == Mode.white_box else None
+            max_tokens = 4096 if req.mode == Mode.white_box else None
             async for chunk in self.llm.astream(prompt, system=sys, temperature=temperature, max_tokens=max_tokens):
                 total_tokens += estimate_tokens(chunk)
                 answer_buf.append(chunk)
