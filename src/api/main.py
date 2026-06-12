@@ -178,6 +178,7 @@ def _user_response(u: dict) -> UserResponse:
     return UserResponse(
         id=u["id"],
         email=u.get("email"),
+        username=u.get("username"),
         display_name=u.get("display_name") or _display_name(u),
         roles=_parse_roles(u.get("roles") or "user"),
         mfa_enabled=u.get("mfa_enabled", False),
@@ -355,6 +356,7 @@ def create_app() -> FastAPI:
                 s,
                 email=body.email,
                 hashed_password=hash_password(body.password),
+                username=body.username,
                 display_name=display,
                 roles=["user"],
             )
@@ -372,7 +374,14 @@ def create_app() -> FastAPI:
         if user.get("mfa_enabled"):
             raise HTTPException(status_code=401, detail="mfa required", headers={"X-MFA-Required": "true"})
         token, _expires, _jti = create_access_token(user["id"], roles=roles)
-        return LoginResponse(access_token=token, user_id=user["id"], roles=roles)
+        return LoginResponse(
+            access_token=token,
+            user_id=user["id"],
+            email=user.get("email", ""),
+            username=user.get("username"),
+            display_name=user.get("display_name"),
+            roles=roles,
+        )
 
     @app.post("/auth/login/mfa", response_model=LoginResponse)
     @limiter.limit("10/minute")

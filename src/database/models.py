@@ -29,6 +29,7 @@ class User(Base):
     mfa_secret: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     display_name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    username: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, unique=True)
 
 
 class BlacklistedToken(Base):

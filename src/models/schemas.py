@@ -36,6 +36,7 @@ class Role(str, Enum):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=200)
+    username: Optional[str] = Field(default=None, max_length=128)
     first_name: Optional[str] = Field(default=None, max_length=120)
     last_name: Optional[str] = Field(default=None, max_length=120)
 
@@ -48,6 +49,9 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     access_token: str
     user_id: str
+    email: str = ""
+    username: Optional[str] = None
+    display_name: Optional[str] = None
     roles: list[str] = []
 
 
@@ -82,6 +86,7 @@ class GitHubOAuthRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: Optional[str] = None
+    username: Optional[str] = None
     display_name: Optional[str] = None
     roles: list[str] = []
     mfa_enabled: bool = False

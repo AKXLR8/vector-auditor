@@ -145,6 +145,7 @@ async def create_user(
     session: Optional[AsyncSession],
     email: str,
     hashed_password: str,
+    username: Optional[str] = None,
     display_name: Optional[str] = None,
     roles: Optional[list[str]] = None,
 ) -> dict:
@@ -157,6 +158,7 @@ async def create_user(
         "roles": json.dumps(roles),
         "mfa_enabled": False,
         "mfa_secret": None,
+        "username": username,
         "display_name": display_name,
         "created_at": datetime.utcnow(),
     }
@@ -179,6 +181,7 @@ def _user_to_dict(u: User) -> dict:
         "roles": roles,
         "mfa_enabled": u.mfa_enabled,
         "mfa_secret": u.mfa_secret,
+        "username": getattr(u, "username", None),
         "display_name": getattr(u, "display_name", None),
         "created_at": u.created_at.isoformat() if u.created_at else None,
     }
