@@ -17,29 +17,41 @@ def _find_pdf_path(document_id: str, upload_dir: str = "uploads") -> Optional[Pa
 
 def extract_bboxes(document_id: str, page_num: int, quote: str, upload_dir: str = "uploads") -> list[list[float]]:
     pdf_path = _find_pdf_path(document_id, upload_dir)
+    bboxes, _, _ = _extract(pdf_path, page_num, quote)
+    return bboxes
+
+
+def extract_bboxes_with_dimensions(document_id: str, page_num: int, quote: str, upload_dir: str = "uploads") -> tuple[list[list[float]], Optional[float], Optional[float]]:
+    pdf_path = _find_pdf_path(document_id, upload_dir)
+    return _extract(pdf_path, page_num, quote)
+
+
+def _extract(pdf_path: Optional[Path], page_num: int, quote: str) -> tuple[list[list[float]], Optional[float], Optional[float]]:
+    """Returns (bboxes, page_width, page_height)."""
     if pdf_path is None:
-        logger.info("bbox: no PDF found for doc %s", document_id)
-        return []
+        return [], None, None
 
     try:
         import pdfplumber
     except ImportError:
         logger.warning("bbox: pdfplumber not available")
-        return []
+        return [], None, None
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
             if page_num < 1 or page_num > len(pdf.pages):
-                logger.info("bbox: page %d out of range for doc %s (pages=%d)", page_num, document_id, len(pdf.pages))
-                return []
+                logger.info("bbox: page %d out of range (pages=%d)", page_num, len(pdf.pages))
+                return [], None, None
             page = pdf.pages[page_num - 1]
+            page_width = float(page.width)
+            page_height = float(page.height)
             words = page.extract_words(keep_blank_chars=True, x_tolerance=3)
             if not words:
-                logger.info("bbox: no words on page %d for doc %s", page_num, document_id)
-                return []
+                logger.info("bbox: no words on page %d", page_num)
+                return [], page_width, page_height
     except Exception as e:
-        logger.warning("bbox: failed to extract words for doc %s page %d: %s", document_id, page_num, e)
-        return []
+        logger.warning("bbox: failed to extract words on page %d: %s", page_num, e)
+        return [], None, None
 
     page_words_text = " ".join(w["text"] for w in words)
     normalized_page = re.sub(r"\s+", "", page_words_text)
@@ -47,8 +59,8 @@ def extract_bboxes(document_id: str, page_num: int, quote: str, upload_dir: str 
 
     start = normalized_page.find(normalized_quote)
     if start == -1:
-        logger.info("bbox: quote not found on page %d for doc %s (len=%d)", page_num, document_id, len(normalized_quote))
-        return []
+        logger.info("bbox: quote not found on page %d (len=%d)", page_num, len(normalized_quote))
+        return [], page_width, page_height
     end = start + len(normalized_quote)
 
     char_count = 0
@@ -60,7 +72,7 @@ def extract_bboxes(document_id: str, page_num: int, quote: str, upload_dir: str 
         w_len = len(wt)
         w_start = char_count
         w_end = char_count + w_len
-        char_count = w_end + 1  # +1 for the space
+        char_count = w_end + 1
         overlap = w_start < end and w_end > start
         if overlap and not in_quote:
             in_quote = True
@@ -77,5 +89,5 @@ def extract_bboxes(document_id: str, page_num: int, quote: str, upload_dir: str 
     if in_quote and collected:
         bboxes.append(collected)
 
-    logger.info("bbox: doc %s page %d → %d bboxes for quote (%d chars)", document_id, page_num, len(bboxes), len(quote))
-    return bboxes
+    logger.info("bbox: page %d → %d bboxes for quote (%d chars)", page_num, len(bboxes), len(quote))
+    return bboxes, page_width, page_height

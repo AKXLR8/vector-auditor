@@ -121,6 +121,8 @@ class Citation(BaseModel):
     page: Optional[int] = None
     document_id: Optional[str] = None
     bboxes: Optional[list[list[float]]] = None
+    page_width: Optional[float] = None
+    page_height: Optional[float] = None
 
 
 class QueryRequest(BaseModel):

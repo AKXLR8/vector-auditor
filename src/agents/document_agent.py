@@ -22,7 +22,7 @@ from ..models.schemas import (
     QueryRequest,
     QueryResponse,
 )
-from ..services.bbox_extractor import extract_bboxes
+
 from ..services.cache import CACHE_TTL, cache_key, get_cache
 from ..services.circuit_breaker import CircuitBreakerOpenError
 from ..services.llm import LLM, LLMError, get_llm
@@ -160,12 +160,16 @@ class DocumentAgent:
 
     @staticmethod
     def _enrich_bboxes(citations: list[Citation], upload_dir: str = "uploads") -> list[Citation]:
+        from ..services.bbox_extractor import extract_bboxes_with_dimensions
         for c in citations:
             if c.page is None or not c.document_id:
                 continue
-            bboxes = extract_bboxes(c.document_id, c.page, c.quote, upload_dir)
+            bboxes, w, h = extract_bboxes_with_dimensions(c.document_id, c.page, c.quote, upload_dir)
             if bboxes:
                 c.bboxes = bboxes
+            if w and h:
+                c.page_width = w
+                c.page_height = h
         return citations
 
     async def _verify(self, question: str, answer: str, context: list[Citation]) -> str:
