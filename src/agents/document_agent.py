@@ -120,7 +120,7 @@ class DocumentAgent:
         if cached:
             answer_tokens = estimate_tokens(cached)
             return cached, prompt_tokens, answer_tokens
-        temperature = 0.5 if mode == Mode.black_box else 0.75
+        temperature = 0.5 if mode == Mode.black_box else 0.3
         max_tokens = 5120 if mode == Mode.white_box else None
         reasoning_effort = "instant" if mode == Mode.black_box else "high"
         reasoning_summary = False if mode == Mode.black_box else True
@@ -343,7 +343,7 @@ class DocumentAgent:
             prompt_tokens = estimate_tokens(prompt)
             total_tokens = prompt_tokens
             answer_buf: list[str] = []
-            temperature = 0.5 if req.mode == Mode.black_box else 0.75
+            temperature = 0.5 if req.mode == Mode.black_box else 0.3
             max_tokens = 5120 if req.mode == Mode.white_box else None
             reasoning_effort = "medium" if req.mode == Mode.black_box else "high"
             reasoning_summary = False if req.mode == Mode.black_box else None
@@ -477,7 +477,7 @@ class DocumentAgent:
         logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
         try:
             raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.",
-                                      max_tokens=4096, temperature=0.75, reasoning_effort="high", reasoning_summary=True, reasoning_summary_wait=True)
+                                      max_tokens=4096, temperature=0.3, reasoning_effort="high", reasoning_summary=True, reasoning_summary_wait=True)
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
             raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))
