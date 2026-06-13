@@ -118,11 +118,13 @@ class DocumentAgent:
         if cached:
             answer_tokens = estimate_tokens(cached)
             return cached, prompt_tokens, answer_tokens
-        temperature = 0.0 if mode == Mode.black_box else None
+        temperature = 0.5 if mode == Mode.black_box else 0.75
         max_tokens = 5120 if mode == Mode.white_box else None
-        reasoning_effort = "high" if mode == Mode.white_box else None
+        reasoning_effort = "instant" if mode == Mode.black_box else "high"
+        reasoning_summary = False if mode == Mode.black_box else True
+        reasoning_summary_wait = True if mode == Mode.white_box else None
         try:
-            answer = await self.llm.chat(prompt, system=sys, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort)
+            answer = await self.llm.chat(prompt, system=sys, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort, reasoning_summary=reasoning_summary, reasoning_summary_wait=reasoning_summary_wait)
             await cache.set(key, answer, CACHE_TTL["llm_response"])
             answer_tokens = estimate_tokens(answer)
             return answer, prompt_tokens, answer_tokens
@@ -176,7 +178,7 @@ class DocumentAgent:
             "'VERIFIED' or 'ISSUES: <specific unsupported claims>'."
         )
         try:
-            return await self.llm.chat(prompt, system="You are a strict fact-checker.")
+            return await self.llm.chat(prompt, system="You are a strict fact-checker.", temperature=0.5, reasoning_effort="low", reasoning_summary=False)
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for _verify: %s", e)
             return "VERIFICATION_SKIPPED: LLM unavailable"
@@ -191,7 +193,7 @@ class DocumentAgent:
             "Return as a JSON array of strings, e.g. [\"gap 1\", \"gap 2\"]."
         )
         try:
-            raw = await self.llm.chat(prompt, system="You identify research gaps concisely.")
+            raw = await self.llm.chat(prompt, system="You identify research gaps concisely.", temperature=0.5, reasoning_effort="low", reasoning_summary=False)
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for _gaps: %s", e)
             return []
@@ -333,10 +335,11 @@ class DocumentAgent:
             prompt_tokens = estimate_tokens(prompt)
             total_tokens = prompt_tokens
             answer_buf: list[str] = []
-            temperature = 0.0 if req.mode == Mode.black_box else None
+            temperature = 0.5 if req.mode == Mode.black_box else 0.75
             max_tokens = 5120 if req.mode == Mode.white_box else None
-            reasoning_effort = "high" if req.mode == Mode.white_box else None
-            async for chunk in self.llm.astream(prompt, system=sys, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort):
+            reasoning_effort = "instant" if req.mode == Mode.black_box else "high"
+            reasoning_summary = False if req.mode == Mode.black_box else None
+            async for chunk in self.llm.astream(prompt, system=sys, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort, reasoning_summary=reasoning_summary):
                 total_tokens += estimate_tokens(chunk)
                 answer_buf.append(chunk)
                 yield {"type": "token", "content": chunk}
@@ -464,7 +467,7 @@ class DocumentAgent:
         logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
         try:
             raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.",
-                                      max_tokens=4096)
+                                      max_tokens=4096, temperature=0.75, reasoning_effort="high", reasoning_summary=True, reasoning_summary_wait=True)
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
             raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))

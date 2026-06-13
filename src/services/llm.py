@@ -37,8 +37,8 @@ class LLM:
         self.api_key = api_key
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self.model = model or DEFAULT_MODEL
-        self.max_tokens = int(max_tokens) if max_tokens is not None else int(os.getenv("LLM_MAX_TOKENS", "2048"))
-        self.temperature = float(temperature if temperature is not None else os.getenv("LLM_TEMPERATURE", "0"))
+        self.max_tokens = int(max_tokens) if max_tokens is not None else int(os.getenv("LLM_MAX_TOKENS", "8192"))
+        self.temperature = float(temperature if temperature is not None else os.getenv("LLM_TEMPERATURE", "0.75"))
         self._cb = CircuitBreaker(name="llm", failure_threshold=5, recovery_timeout_s=30.0)
 
     @property
@@ -55,6 +55,8 @@ class LLM:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
+        reasoning_summary: Optional[bool] = None,
+        reasoning_summary_wait: Optional[bool] = None,
     ) -> str:
         messages: list[dict] = []
         if system:
@@ -62,17 +64,24 @@ class LLM:
         messages.append({"role": "user", "content": prompt})
 
         reasoning = reasoning_effort or os.getenv("REASONING_EFFORT", "medium")
+        temp = self.temperature if temperature is None else temperature
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens or self.max_tokens,
-            "temperature": self.temperature if temperature is None else temperature,
+            "temperature": temp,
             "reasoning_effort": reasoning,
         }
-        logger.info("LLM.chat: model=%s max_tokens=%s temp=%s reasoning=%s prompt_len=%d",
+        if reasoning_summary is not None:
+            payload["reasoning_summary"] = reasoning_summary
+        if reasoning_summary_wait is not None:
+            payload["reasoning_summary_wait"] = reasoning_summary_wait
+        logger.info("LLM.chat: model=%s max_tokens=%s temp=%s reasoning=%s summary=%s summary_wait=%s prompt_len=%d",
                      self.model, max_tokens or self.max_tokens,
-                     self.temperature if temperature is None else temperature,
-                     reasoning, len(prompt))
+                     temp, reasoning,
+                     payload.get("reasoning_summary", "default"),
+                     payload.get("reasoning_summary_wait", "default"),
+                     len(prompt))
         async with httpx.AsyncClient(timeout=120.0) as client:
             r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=self._headers)
             if r.status_code != 200:
@@ -91,9 +100,11 @@ class LLM:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
+        reasoning_summary: Optional[bool] = None,
+        reasoning_summary_wait: Optional[bool] = None,
     ) -> str:
         return await self._cb.call(
-            self._do_chat_with_retry, prompt, system=system, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort
+            self._do_chat_with_retry, prompt, system=system, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort, reasoning_summary=reasoning_summary, reasoning_summary_wait=reasoning_summary_wait
         )
 
     @retry_with_backoff(max_retries=2, base_delay_s=0.5, retryable_exceptions=(httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError))
@@ -104,8 +115,10 @@ class LLM:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
+        reasoning_summary: Optional[bool] = None,
+        reasoning_summary_wait: Optional[bool] = None,
     ) -> str:
-        return await self._do_chat(prompt, system=system, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort)
+        return await self._do_chat(prompt, system=system, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort, reasoning_summary=reasoning_summary, reasoning_summary_wait=reasoning_summary_wait)
 
     async def astream(
         self,
@@ -114,6 +127,7 @@ class LLM:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None,
+        reasoning_summary: Optional[bool] = None,
     ) -> AsyncIterator[str]:
         if not self._cb.is_available():
             logger.warning("LLM circuit is OPEN — streaming unavailable")
@@ -125,14 +139,17 @@ class LLM:
         messages.append({"role": "user", "content": prompt})
 
         reasoning = reasoning_effort or os.getenv("REASONING_EFFORT", "medium")
+        temp = self.temperature if temperature is None else temperature
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens or self.max_tokens,
-            "temperature": self.temperature if temperature is None else temperature,
+            "temperature": temp,
             "reasoning_effort": reasoning,
             "stream": True,
         }
+        if reasoning_summary is not None:
+            payload["reasoning_summary"] = reasoning_summary
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
