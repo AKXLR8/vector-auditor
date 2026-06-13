@@ -32,17 +32,30 @@ from ..vectorstore.Qdrant import get_vector_store
 logger = logging.getLogger("rga_auditor.agent")
 
 
+def _sanitize_citations(answer: str, max_citation: int) -> str:
+    """Remove citation references [N] where N > max_citation (hallucinated)."""
+    import re
+    def _replace(m):
+        num = int(m.group(1))
+        return m.group(0) if 1 <= num <= max_citation else m.group(0).replace(f"[{num}]", f"(ref {num})")
+    return re.sub(r'\[(\d+)\]', _replace, answer)
+
+
 SYSTEM_WHITE_BOX = (
     "You are a meticulous research analyst. Answer the user's question using ONLY "
     "the provided context. Cite sources using [n] notation matching the numbered "
-    "context blocks. If the context is insufficient, say so explicitly. "
+    "context blocks. CRITICAL: Only valid citation numbers are the ones shown "
+    "in the Context section below (e.g., [1], [2], [3], ...). Never use citation "
+    "numbers outside this range. If the context is insufficient, say so explicitly. "
     "Structure your answer with clear sections: Summary, Key Findings, Analysis, "
     "and Caveats. Be precise and concise."
 )
 
 SYSTEM_BLACK_BOX = (
     "You are a precise question-answering system. Answer the question using ONLY the "
-    "provided context. Cite sources using [n] notation. No commentary, no reasoning, "
+    "provided context. Cite sources using [n] notation. CRITICAL: Only valid citation "
+    "numbers are the ones shown in the Context section below (e.g., [1], [2], [3], ...). "
+    "Never use citation numbers outside this range. No commentary, no reasoning, "
     "no caveats — just the cited answer."
 )
 
@@ -63,7 +76,7 @@ class DocumentAgent:
         self.max_hops = max_hops or int(os.getenv("MAX_DOCUMENT_HOPS", "3"))
         self.max_citations_per_doc = max_citations_per_doc or int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
         self.max_citations_total = max_citations_total or int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
-        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "10"))
+        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "20"))
         self.rerank_top_k = rerank_top_k or int(os.getenv("RERANK_TOP_K", "5"))
 
     def _per_doc_caps(self, override: Optional[int]) -> int:
@@ -125,6 +138,8 @@ class DocumentAgent:
         reasoning_summary_wait = True if mode == Mode.white_box else None
         try:
             answer = await self.llm.chat(prompt, system=sys, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort, reasoning_summary=reasoning_summary, reasoning_summary_wait=reasoning_summary_wait)
+            # Strip hallucinated citation numbers outside the valid range
+            answer = _sanitize_citations(answer, len(context))
             await cache.set(key, answer, CACHE_TTL["llm_response"])
             answer_tokens = estimate_tokens(answer)
             return answer, prompt_tokens, answer_tokens
@@ -349,6 +364,8 @@ class DocumentAgent:
                 yield {"type": "token", "content": chunk}
 
             full_answer = "".join(answer_buf)
+            # Sanitize hallucinated citations before verify/gaps
+            full_answer = _sanitize_citations(full_answer, len(all_citations))
             answer_tokens = total_tokens - prompt_tokens
             cost = estimate_cost(prompt_tokens, answer_tokens)
 

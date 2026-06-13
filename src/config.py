@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     max_document_hops: int = Field(default=3, alias="MAX_DOCUMENT_HOPS")
     max_citations_per_doc: int = Field(default=6, alias="MAX_CITATIONS_PER_DOC")
     max_citations_total: int = Field(default=20, alias="MAX_CITATIONS_TOTAL")
-    retrieve_k_per_query: int = Field(default=10, alias="RETRIEVE_K_PER_QUERY")
+    retrieve_k_per_query: int = Field(default=20, alias="RETRIEVE_K_PER_QUERY")
 
     # ── Database ──────────────────────────────────────────
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")
