@@ -73,13 +73,15 @@ class DocumentAgent:
         self.llm = llm or get_llm()
         self.vs = vector_store or get_vector_store()
         self.max_hops = max_hops or int(os.getenv("MAX_DOCUMENT_HOPS", "5"))
-        self.max_citations_total = max_citations_total or int(os.getenv("MAX_CITATIONS_TOTAL", "50"))
-        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "20"))
-        self.rerank_top_k = rerank_top_k or int(os.getenv("RERANK_TOP_K", "20"))
+        self.max_citations_total = max_citations_total or int(os.getenv("MAX_CITATIONS_TOTAL", "10"))
+        self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "15"))
+        self.rerank_top_k = rerank_top_k or int(os.getenv("RERANK_TOP_K", "10"))
 
     def _truncate_citations(self, citations: list[Citation]) -> list[Citation]:
         out: list[Citation] = []
         for c in citations:
+            if len(c.quote) < 50:
+                continue
             out.append(c)
             if self.max_citations_total and len(out) >= self.max_citations_total:
                 break
@@ -432,7 +434,7 @@ class DocumentAgent:
         else:
             logger.info("analyze_document: single-doc mode, doc=%s", req_doc_ids[0])
             citations = await self._retrieve(user_id, question or "key findings and methodology", req_doc_ids or None,
-                                              self.retrieve_k * 2)
+                                              self.max_citations_total)
         citations = self._truncate_citations(citations)
         citations = await self._rerank_citations(question or "key findings and methodology", citations, self.rerank_top_k)
         citations = self._enrich_bboxes(citations)
