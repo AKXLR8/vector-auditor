@@ -182,7 +182,7 @@ class DocumentAgent:
             "'VERIFIED' or 'ISSUES: <specific unsupported claims>'."
         )
         try:
-            return await self.llm.chat(prompt, system="You are a strict fact-checker.", temperature=0.5, reasoning_effort="low", reasoning_summary=False)
+            return await self.llm.chat(prompt, system="You are a strict fact-checker.", temperature=0.5, reasoning_effort="high", reasoning_summary=False)
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for _verify: %s", e)
             return "VERIFICATION_SKIPPED: LLM unavailable"
@@ -190,14 +190,14 @@ class DocumentAgent:
     async def _gaps(self, question: str, context: list[Citation]) -> list[str]:
         if not context:
             return []
-        ctx = "\n".join(c.quote[:200] for c in context[:8])
+        ctx = "\n".join(f"[{i+1}] {c.quote}" for i, c in enumerate(context))
         prompt = (
             f"Question: {question}\n\nContext:\n{ctx}\n\n"
             "List up to 3 specific research gaps or missing information in the context. "
             "Return as a JSON array of strings, e.g. [\"gap 1\", \"gap 2\"]."
         )
         try:
-            raw = await self.llm.chat(prompt, system="You identify research gaps concisely.", temperature=0.5, reasoning_effort="low", reasoning_summary=False)
+            raw = await self.llm.chat(prompt, system="You identify research gaps concisely.", temperature=0.5, reasoning_effort="medium", reasoning_summary=False)
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for _gaps: %s", e)
             return []
