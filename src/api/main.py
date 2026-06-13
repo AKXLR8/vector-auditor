@@ -948,7 +948,6 @@ def set_upload_processor() -> None:
             _t1 = time.time()
             text: str = ""
             page_ranges: Optional[list] = None
-            page_texts_pdf: Optional[list[str]] = None
             has_pii: bool = False
             from ..services.document_parser import parse_document
 
@@ -975,11 +974,11 @@ def set_upload_processor() -> None:
                     asyncio.to_thread(parse_pdf_with_pages, content),
                     _pii_scan(),
                 )
-                md_text, (pdf_text, pr, ppts), has_pii = results
-                text = md_text
+                md_text, (pdf_text, pr), has_pii = results
+                # Use pdfplumber text for chunking — page mapping is guaranteed accurate
+                text = pdf_text if pdf_text.strip() else md_text
                 page_ranges = pr
-                page_texts_pdf = ppts
-                logger.info("UPLOAD: parsed PDF %s → %d chars (MarkItDown) + %d chars (pdfplumber) + %d pages in %.2fs",
+                logger.info("UPLOAD: parsed PDF %s → %d chars (MarkItDown) + %d chars (pdfplumber, used) + %d pages in %.2fs",
                              record.filename, len(md_text), len(pdf_text), len(page_ranges or []), time.time() - _t1)
             else:
                 text, has_pii = await asyncio.gather(
@@ -1005,7 +1004,7 @@ def set_upload_processor() -> None:
             await get_worker().queue.update(record.id, stage="embedding", progress=60)
             _t2 = time.time()
             n_chunks = await get_vector_store().add_document(
-                user_id=record.user_id, document_id=record.document_id, filename=record.filename, text=text, page_ranges=page_ranges, page_texts=page_texts_pdf
+                user_id=record.user_id, document_id=record.document_id, filename=record.filename, text=text, page_ranges=page_ranges
             )
             logger.info("UPLOAD: indexed %d chunks in %.2fs (total %.2fs)", n_chunks, time.time() - _t2, time.time() - _t0)
             await get_worker().queue.update(record.id, stage="indexing", progress=90)
