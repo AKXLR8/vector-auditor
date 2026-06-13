@@ -133,11 +133,11 @@ class VectorStore:
             pages.append(pg)
         return pages
 
-    async def add_document(self, user_id: str, document_id: str, filename: str, text: str, page_ranges: Optional[list[dict]] = None) -> int:
-        return await self._index_cb.call(self._do_add_document, user_id, document_id, filename, text, page_ranges)
+    async def add_document(self, user_id: str, document_id: str, filename: str, text: str, page_ranges: Optional[list[dict]] = None, page_texts: Optional[list[str]] = None) -> int:
+        return await self._index_cb.call(self._do_add_document, user_id, document_id, filename, text, page_ranges, page_texts)
 
     @retry_with_backoff(max_retries=2, base_delay_s=0.5, retryable_exceptions=(ConnectionError, TimeoutError, OSError))
-    async def _do_add_document(self, user_id: str, document_id: str, filename: str, text: str, page_ranges: Optional[list[dict]] = None) -> int:
+    async def _do_add_document(self, user_id: str, document_id: str, filename: str, text: str, page_ranges: Optional[list[dict]] = None, page_texts: Optional[list[str]] = None) -> int:
         import time
         from ..services.async_worker import run_sync
         from qdrant_client.http import models
@@ -151,7 +151,17 @@ class VectorStore:
             return 0
 
         chunk_pages: list[int] = []
-        if page_ranges:
+        if page_texts:
+            for chunk in chunks:
+                found = False
+                for i, pt in enumerate(page_texts):
+                    if chunk in pt:
+                        chunk_pages.append(i + 1)
+                        found = True
+                        break
+                if not found:
+                    chunk_pages.append(0)
+        elif page_ranges:
             chunk_pages = self._map_chunks_to_pages(chunks, text, page_ranges)
 
         t1 = time.monotonic()

@@ -28,11 +28,13 @@ def parse_pdf(content: bytes) -> str:
     return _parse_with_markitdown(content, ".pdf")
 
 
-def parse_pdf_with_pages(content: bytes) -> tuple[str, list[dict]]:
-    """Parse PDF and return (full_text, page_ranges) where page_ranges
-    contains {start, end, page} character-offset-to-page mappings."""
+def parse_pdf_with_pages(content: bytes) -> tuple[str, list[dict], list[str]]:
+    """Parse PDF and return (full_text, page_ranges, page_texts) where
+    page_ranges contains {start, end, page} character-offset-to-page mappings
+    and page_texts is a list of per-page extracted text (pdfplumber)."""
     import pdfplumber
-    pages: list[dict] = []
+    page_ranges: list[dict] = []
+    page_texts: list[str] = []
     texts: list[str] = []
     offset = 0
     with pdfplumber.open(io.BytesIO(content)) as pdf:
@@ -41,12 +43,15 @@ def parse_pdf_with_pages(content: bytes) -> tuple[str, list[dict]]:
             if t:
                 start = offset
                 texts.append(t)
+                page_texts.append(t)
                 offset += len(t)
-                pages.append({"start": start, "end": offset, "page": i + 1})
+                page_ranges.append({"start": start, "end": offset, "page": i + 1})
                 t += "\n\n"
                 offset += 2  # separator
+            else:
+                page_texts.append("")
     full_text = "\n\n".join(texts)
-    return full_text, pages
+    return full_text, page_ranges, page_texts
 
 
 def parse_docx(content: bytes) -> str:
