@@ -341,7 +341,7 @@ class DocumentAgent:
             answer_buf: list[str] = []
             temperature = 0.5 if req.mode == Mode.black_box else 0.75
             max_tokens = 5120 if req.mode == Mode.white_box else None
-            reasoning_effort = "instant" if req.mode == Mode.black_box else "high"
+            reasoning_effort = "medium" if req.mode == Mode.black_box else "high"
             reasoning_summary = False if req.mode == Mode.black_box else None
             async for chunk in self.llm.astream(prompt, system=sys, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort, reasoning_summary=reasoning_summary):
                 total_tokens += estimate_tokens(chunk)
