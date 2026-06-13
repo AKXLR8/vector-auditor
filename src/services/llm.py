@@ -54,22 +54,25 @@ class LLM:
         system: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> str:
         messages: list[dict] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        reasoning = reasoning_effort or os.getenv("REASONING_EFFORT", "medium")
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": self.temperature if temperature is None else temperature,
+            "reasoning_effort": reasoning,
         }
-        logger.info("LLM.chat: model=%s max_tokens=%s temp=%s prompt_len=%d",
+        logger.info("LLM.chat: model=%s max_tokens=%s temp=%s reasoning=%s prompt_len=%d",
                      self.model, max_tokens or self.max_tokens,
                      self.temperature if temperature is None else temperature,
-                     len(prompt))
+                     reasoning, len(prompt))
         async with httpx.AsyncClient(timeout=120.0) as client:
             r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=self._headers)
             if r.status_code != 200:
@@ -87,9 +90,10 @@ class LLM:
         system: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> str:
         return await self._cb.call(
-            self._do_chat_with_retry, prompt, system=system, temperature=temperature, max_tokens=max_tokens
+            self._do_chat_with_retry, prompt, system=system, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort
         )
 
     @retry_with_backoff(max_retries=2, base_delay_s=0.5, retryable_exceptions=(httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError))
@@ -99,8 +103,9 @@ class LLM:
         system: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> str:
-        return await self._do_chat(prompt, system=system, temperature=temperature, max_tokens=max_tokens)
+        return await self._do_chat(prompt, system=system, temperature=temperature, max_tokens=max_tokens, reasoning_effort=reasoning_effort)
 
     async def astream(
         self,
@@ -108,6 +113,7 @@ class LLM:
         system: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> AsyncIterator[str]:
         if not self._cb.is_available():
             logger.warning("LLM circuit is OPEN — streaming unavailable")
@@ -118,11 +124,13 @@ class LLM:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        reasoning = reasoning_effort or os.getenv("REASONING_EFFORT", "medium")
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": self.temperature if temperature is None else temperature,
+            "reasoning_effort": reasoning,
             "stream": True,
         }
         try:
