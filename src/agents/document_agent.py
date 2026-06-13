@@ -66,33 +66,22 @@ class DocumentAgent:
         llm: Optional[LLM] = None,
         vector_store=None,
         max_hops: Optional[int] = None,
-        max_citations_per_doc: Optional[int] = None,
         max_citations_total: Optional[int] = None,
         retrieve_k: Optional[int] = None,
         rerank_top_k: Optional[int] = None,
     ) -> None:
         self.llm = llm or get_llm()
         self.vs = vector_store or get_vector_store()
-        self.max_hops = max_hops or int(os.getenv("MAX_DOCUMENT_HOPS", "3"))
-        self.max_citations_per_doc = max_citations_per_doc or int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
-        self.max_citations_total = max_citations_total or int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
+        self.max_hops = max_hops or int(os.getenv("MAX_DOCUMENT_HOPS", "5"))
+        self.max_citations_total = max_citations_total or int(os.getenv("MAX_CITATIONS_TOTAL", "50"))
         self.retrieve_k = retrieve_k or int(os.getenv("RETRIEVE_K_PER_QUERY", "20"))
-        self.rerank_top_k = rerank_top_k or int(os.getenv("RERANK_TOP_K", "5"))
-
-    def _per_doc_caps(self, override: Optional[int]) -> int:
-        return min(self.max_citations_per_doc, override or self.max_citations_per_doc)
+        self.rerank_top_k = rerank_top_k or int(os.getenv("RERANK_TOP_K", "20"))
 
     def _truncate_citations(self, citations: list[Citation]) -> list[Citation]:
-        per_doc: dict[str, int] = {}
         out: list[Citation] = []
         for c in citations:
-            doc_key = c.source or "unknown"
-            n = per_doc.get(doc_key, 0)
-            if n >= self.max_citations_per_doc:
-                continue
-            per_doc[doc_key] = n + 1
             out.append(c)
-            if len(out) >= self.max_citations_total:
+            if self.max_citations_total and len(out) >= self.max_citations_total:
                 break
         return out
 
@@ -237,7 +226,7 @@ class DocumentAgent:
                 mode=req.mode,
             )
         t0 = time.time()
-        k = self._per_doc_caps(req.max_citations) * 2
+        k = self.retrieve_k
         all_citations: list[Citation] = []
         seen: set[tuple[str, str]] = set()
         questions = [req.question]
@@ -248,9 +237,9 @@ class DocumentAgent:
                 if key not in seen:
                     seen.add(key)
                     all_citations.append(c)
-            if len(all_citations) >= self.max_citations_total or not citations:
+            if self.max_citations_total and len(all_citations) >= self.max_citations_total or not citations:
                 break
-            if req.mode == Mode.white_box and len(citations) >= self.max_citations_per_doc:
+            if req.mode == Mode.white_box and citations:
                 topics = ", ".join(c.quote[:80] for c in citations[:2])
                 questions.append(f"More context related to: {topics} — regarding {req.question}")
             else:
@@ -261,7 +250,7 @@ class DocumentAgent:
 
         reasoning_path: list[str] = []
         if req.mode == Mode.white_box:
-            reasoning_path.append("Retrieved %d candidate citations across %d hop(s)" % (len(all_citations), min(len(questions), self.max_hops)))
+            reasoning_path.append("Retrieved %d citations across %d hop(s)" % (len(all_citations), min(len(questions), self.max_hops)))
 
         answer, prompt_tokens, answer_tokens = await self._generate(req.question, all_citations, req.mode, req.conversation_history)
         if req.mode == Mode.white_box:
@@ -324,9 +313,9 @@ class DocumentAgent:
                     if key not in seen:
                         seen.add(key)
                         all_citations.append(c)
-                if len(all_citations) >= self.max_citations_total or not citations:
+                if self.max_citations_total and len(all_citations) >= self.max_citations_total or not citations:
                     break
-                if req.mode == Mode.white_box and len(citations) >= self.max_citations_per_doc:
+                if req.mode == Mode.white_box and citations:
                     topics = ", ".join(c.quote[:80] for c in citations[:2])
                     questions.append(f"More context related to: {topics} — regarding {req.question}")
                 else:
@@ -439,11 +428,11 @@ class DocumentAgent:
                 dedup = {}
                 for c in citations:
                     dedup.setdefault(c.quote, c)
-                citations = list(dedup.values())[:max_citations or 20]
+                citations = list(dedup.values())[:max_citations or self.max_citations_total]
         else:
             logger.info("analyze_document: single-doc mode, doc=%s", req_doc_ids[0])
             citations = await self._retrieve(user_id, question or "key findings and methodology", req_doc_ids or None,
-                                              min(self.retrieve_k * 2, 20))
+                                              self.retrieve_k * 2)
         citations = self._truncate_citations(citations)
         citations = await self._rerank_citations(question or "key findings and methodology", citations, self.rerank_top_k)
         citations = self._enrich_bboxes(citations)
