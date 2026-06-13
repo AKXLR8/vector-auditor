@@ -169,7 +169,7 @@ class DocumentAgent:
     async def _verify(self, question: str, answer: str, context: list[Citation]) -> str:
         if not context:
             return "no context to verify against"
-        ctx = "\n".join(f"[{i+1}] {c.quote[:300]}" for i, c in enumerate(context[:5]))
+        ctx = "\n".join(f"[{i+1}] {c.quote}" for i, c in enumerate(context))
         prompt = (
             f"Question: {question}\n\nProposed answer: {answer}\n\nContext:\n{ctx}\n\n"
             "Is every claim in the answer supported by the context? Reply with one line: "
