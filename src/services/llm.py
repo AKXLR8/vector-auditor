@@ -118,7 +118,7 @@ PROFILES: dict[str, _Profile] = {
     "minimax": _Profile(
         name="Minimax M3 (NVIDIA)",
         base_url="https://integrate.api.nvidia.com/v1",
-        model="minimax-m3",
+        model="minimaxai/minimax-m3",
         modes={
             "black_box": _ModeParams(temperature=0.3, max_tokens=4096),
             "white_box": _ModeParams(temperature=0.3, max_tokens=8192),
@@ -139,7 +139,11 @@ def _get_profile(name: Optional[str] = None) -> _Profile:
         return p
     if key == "custom":
         model = os.getenv("LLM_MODEL") or "unknown"
-        base_url = (os.getenv("LLM_BASE_URL") or "https://integrate.api.nvidia.com/v1").rstrip("/")
+        raw_base = os.getenv("LLM_BASE_URL") or "https://integrate.api.nvidia.com/v1"
+        base_url = raw_base.rstrip("/")
+        suffix = "/chat/completions"
+        if base_url.endswith(suffix):
+            base_url = base_url[:-len(suffix)]
         logger.info("Building custom profile: model=%s base_url=%s", model, base_url)
         return _Profile(
             name=f"Custom ({model})",
@@ -171,7 +175,13 @@ class LLM:
         self.profile = _get_profile(profile)
         # Env var overrides take priority over profile values
         self.model = os.getenv("LLM_MODEL") or model or self.profile.model
-        self.base_url = (os.getenv("LLM_BASE_URL") or base_url or self.profile.base_url).rstrip("/")
+        raw = os.getenv("LLM_BASE_URL") or base_url or self.profile.base_url
+        self.base_url = raw.rstrip("/")
+        # Allow LLM_BASE_URL to contain the full path; strip /chat/completions
+        # since callers append it.
+        suffix = "/chat/completions"
+        if self.base_url.endswith(suffix):
+            self.base_url = self.base_url[:-len(suffix)]
         self.api_key = api_key or get_secret("LLM_API_KEY") or get_secret("INCEPTION_API_KEY") or os.getenv("LLM_API_KEY") or os.getenv("INCEPTION_API_KEY")
         if not self.api_key:
             raise RuntimeError("No LLM API key found. Set LLM_API_KEY or INCEPTION_API_KEY in .env")
