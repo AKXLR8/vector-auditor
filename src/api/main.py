@@ -994,10 +994,8 @@ def set_upload_processor() -> None:
                     loop = asyncio.get_running_loop()
                     original_len = len(text)
                     text = await loop.run_in_executor(None, pii.anonymize, text)
-                    if page_texts_pdf:
-                        page_texts_pdf = [await loop.run_in_executor(None, pii.anonymize, pt) for pt in page_texts_pdf]
                     if len(text) != original_len:
-                        logger.info("PII: anonymized %s (%d chars → %d chars, %d page texts)", record.filename, original_len, len(text), len(page_texts_pdf or []))
+                        logger.info("PII: anonymized %s (%d chars → %d chars)", record.filename, original_len, len(text))
                     else:
                         logger.info("PII: scan flagged but no entities anonymized for %s", record.filename)
             await get_worker().queue.update(record.id, stage="chunking", progress=40)
