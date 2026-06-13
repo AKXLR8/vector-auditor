@@ -131,6 +131,7 @@ class QueryRequest(BaseModel):
     conversation_history: Optional[list[MessageHistory]] = None
     mode: Mode = Mode.white_box
     max_citations: Optional[int] = Field(default=None, ge=1, le=100)
+    model: Optional[str] = Field(default=None, description="LLM profile key (mercury, gpt5-mini, gpt5, claude-haiku, claude-opus, openrouter)")
 
 
 class QueryResponse(BaseModel):
@@ -151,6 +152,7 @@ class AnalyzeRequest(BaseModel):
     question: Optional[str] = None
     document_ids: Optional[list[str]] = None
     max_citations: Optional[int] = Field(default=None, ge=1, le=100)
+    model: Optional[str] = Field(default=None, description="LLM profile key")
 
 
 class CrossDocComparison(BaseModel):

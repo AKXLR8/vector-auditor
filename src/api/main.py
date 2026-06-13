@@ -520,7 +520,7 @@ def create_app() -> FastAPI:
                      user["id"], body.question, body.document_ids, body.max_citations)
         agent = _get_agent()
         try:
-            result = await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations)
+            result = await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations, model=body.model)
             # Anonymize PII in all text fields
             gr = get_guardrails()
             loop = asyncio.get_running_loop()
@@ -889,6 +889,11 @@ def create_app() -> FastAPI:
                 for i in items
             ]
         )
+
+    @app.get("/llm/profiles")
+    async def list_llm_profiles(request: Request, user=Depends(require_role("user"))):
+        from ..services.llm import list_profiles
+        return {"profiles": list_profiles()}
 
     @app.post("/cache/flush")
     async def cache_flush(request: Request, user=Depends(require_role("admin"))):
