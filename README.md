@@ -40,7 +40,7 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 ## Features
 
 - **Semantic Search** — `all-MiniLM-L6-v2` embeddings (384-d) for meaning-based retrieval
-- **Cross-Encoder Reranker** — `BAAI/bge-reranker-v2-mini` re-scores 10 candidates → top 5 before LLM
+- **Cross-Encoder Reranker** — `BAAI/bge-reranker-base` re-scores 10 candidates → top 5 before LLM
 - **Cited Grounding** — inline `[N]` markers with page-level citations from pdfplumber, click to jump
 - **Section-Aware Chunking** — 1000-char windows with 200-char overlap, split by markdown headers
 - **Multi-Document Q&A** — select any subset of uploaded PDFs, scoped answers
@@ -95,7 +95,7 @@ graph TB
 
   subgraph "LLM / RAG"
     Agent["Document Agent<br/>src/agents/document_agent.py"]
-    Reranker["Cross-Encoder Reranker<br/>BAAI/bge-reranker-v2-mini"]
+    Reranker["Cross-Encoder Reranker<br/>BAAI/bge-reranker-base"]
     LLM["LLM Service<br/>Mercury-2 via Inception Labs"]
     CB_L["Circuit Breaker<br/>5 failures / 30s recovery"]
     Retry["Retry w/ Backoff<br/>0.5s → 1s → 2s"]
@@ -163,7 +163,7 @@ graph TB
 | Auth | JWT (python-jose) + bcrypt |
 | Database | PostgreSQL (SQLAlchemy async) / in-memory JSONL fallback |
 | Vector Store | Qdrant (Cloud / local / in-memory, collection `documents`) |
-| Reranker | Cross-Encoder BAAI/bge-reranker-v2-mini |
+| Reranker | Cross-Encoder BAAI/bge-reranker-base |
 | Embeddings | SentenceTransformers all-MiniLM-L6-v2 (384-d) |
 | LLM | OpenAI-compatible (Inception Labs mercury-2) |
 | Cache | Redis / in-process TTLCache |

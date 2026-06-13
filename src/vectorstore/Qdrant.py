@@ -84,8 +84,8 @@ class VectorStore:
             self._reranker = joblib.load(str(pkl))
             logger.info("VectorStore: loaded reranker from %s in %.2fs", pkl, time.monotonic() - t0)
         else:
-            logger.info("VectorStore: pickle not found at %s — downloading BAAI/bge-reranker-v2-mini", pkl)
-            self._reranker = CrossEncoder("BAAI/bge-reranker-v2-mini")
+            logger.info("VectorStore: pickle not found at %s — downloading BAAI/bge-reranker-base", pkl)
+            self._reranker = CrossEncoder("BAAI/bge-reranker-base")
             logger.info("VectorStore: reranker downloaded in %.2fs", time.monotonic() - t0)
 
     def _create_collection(self) -> None:
