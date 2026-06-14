@@ -457,16 +457,17 @@ class DocumentAgent:
         doc_names = sorted({c.source for c in citations})
         is_multi = len(doc_names) > 1
         prompt = (
-            f"Based on the following document excerpts, answer the user's question "
-            f"in a detailed, structured, well-reasoned manner. "
-            f"Do NOT include a summary section — directly address what was asked."
+            f"Based on the following document excerpts, answer the user's question. "
+            f"Respond in plain paragraphs only — NO headers, NO sections, NO bullet points, "
+            f"NO bold text, NO numbered lists, NO formatting of any kind. "
+            f"Just write natural prose."
             f"\n\nDocuments analyzed ({len(doc_names)}): {', '.join(doc_names)}"
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
             f"Answer:"
         )
         logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
         try:
-            raw = await self.llm.chat(prompt, system="You are a research analyst. Answer the user's question directly and thoroughly.", mode="analyze")
+            raw = await self.llm.chat(prompt, system="You are a helpful assistant. Answer in plain text with no structure, headers, or formatting.", mode="analyze")
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
             raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))
