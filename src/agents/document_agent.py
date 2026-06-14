@@ -271,6 +271,9 @@ class DocumentAgent:
                 reasoning_path.append("Verification skipped — LLM unavailable")
             else:
                 reasoning_path.append("VERIFIED" if verification.startswith("VERIFIED") else f"ISSUES: {verification[:120]}")
+            # Append verification warning to answer so frontend always shows it
+            if not verification.startswith("VERIFIED"):
+                answer += f"\n\n---\n**⚠️ Verification:** {verification}"
 
         cost = estimate_cost(prompt_tokens, answer_tokens)
         query_id = uuid.uuid4().hex
@@ -360,6 +363,8 @@ class DocumentAgent:
                 verification = await self._verify(req.question, full_answer, all_citations)
                 yield {"type": "verification", "content": verification}
                 reasoning_path.append("Verification: " + ("passed" if verification.startswith("VERIFIED") else "issues found"))
+                if not verification.startswith("VERIFIED"):
+                    yield {"type": "token", "content": f"\n\n---\n⚠️ Verification: {verification}"}
                 gaps = await self._gaps(req.question, all_citations)
                 for g in gaps:
                     yield {"type": "gap_analysis", "content": g}
