@@ -199,7 +199,10 @@ class LLM:
                 logger.error("LLM.chat: HTTP %d: %s", r.status_code, body)
                 raise LLMError(f"{self.profile.name} {r.status_code}: {body}")
             data = r.json()
-            content = data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"].get("content")
+            if content is None:
+                logger.warning("LLM.chat: null content in response (reasoning summary mode?) — returning empty")
+                content = ""
             logger.info("LLM.chat: response length=%d, preview=%.200s", len(content), content)
             return content
 
