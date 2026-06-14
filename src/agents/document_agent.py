@@ -16,6 +16,7 @@ from typing import Optional
 
 from ..models.schemas import (
     Citation,
+    CrossDocComparison,
     DocumentAnalysis,
     MessageHistory,
     Mode,
@@ -503,6 +504,29 @@ class DocumentAgent:
         for field in ("limitations", "methodology", "summary"):
             if isinstance(data.get(field), list):
                 data[field] = "\n".join(f"- {item}" for item in data[field])
+        # Normalize fields that should be lists but LLM might return as single string
+        for field in ("key_findings", "research_gaps", "contradictions", "open_questions"):
+            if isinstance(data.get(field), str):
+                data[field] = [data[field]]
+        # Normalize confidence
+        conf = data.get("confidence", "moderate")
+        if not isinstance(conf, str):
+            conf = str(conf) if conf is not None else "moderate"
+        data["confidence"] = conf
+        # Wire in cross_document_comparison and per_document_summary
+        cross_doc = data.get("cross_document_comparison")
+        if isinstance(cross_doc, dict):
+            for f in ("common_themes", "differences", "complementary_insights"):
+                if isinstance(cross_doc.get(f), str):
+                    cross_doc[f] = [cross_doc[f]]
+            data["cross_document_comparison"] = CrossDocComparison(**cross_doc)
+        else:
+            data.pop("cross_document_comparison", None)
+        pd_summary = data.get("per_document_summary")
+        if isinstance(pd_summary, dict):
+            data["per_document_summary"] = {str(k): str(v) for k, v in pd_summary.items()}
+        else:
+            data.pop("per_document_summary", None)
         if not data:
             logger.warning("analyze_document: no valid JSON in LLM response, using fallback")
             data = {"summary": raw[:500], "key_findings": [], "methodology": "",
