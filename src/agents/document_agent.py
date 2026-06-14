@@ -455,22 +455,20 @@ class DocumentAgent:
             seen_docs.setdefault(key, c.source)
         doc_names = sorted(seen_docs.values())
         is_multi = len(doc_names) > 1
-        # Let the query drive the output structure — answer what was asked, nothing else
+        # Let the query drive the output structure — answer ONLY what was asked
         structure_instruction = (
-            "Output a JSON object whose keys directly answer the user's question. "
-            "Do NOT include a 'summary' key unless the question explicitly asks for one. "
-            "Instead, use descriptive keys that match the query topic (e.g., research_gaps, "
-            "key_findings, methodology, limitations, contradictions, open_questions, "
-            "confidence ('high'|'moderate'|'low')). Each value must be a detailed, "
-            "structured, well-reasoned response — use arrays of strings for multi-item "
-            "topics, and single strings for narrative sections. Include only keys relevant "
-            "to the question — don't force unrelated sections."
+            "Output a JSON object whose keys are precisely the topics the user asked about. "
+            "For example, if the user asks about 'research gaps', the JSON should have "
+            "a single key 'research_gaps' containing a detailed, structured, well-reasoned "
+            "analysis. Do NOT add summary, key_findings, analysis, caveats, or any other "
+            "keys unless the question explicitly asks for them. Only include keys "
+            "directly matching the user's request."
         )
         docs_analyzed = sorted({c.source for c in citations})
         doc_ids_with_data = sorted({c.document_id for c in citations if c.document_id})
         prompt = (
-            f"Based on the following document excerpts, produce a detailed JSON object with keys: "
-            f"{structure_instruction}."
+            f"Based on the following document excerpts, answer the user's question "
+            f"as a detailed JSON object. {structure_instruction}"
             f"\n\nDocuments analyzed ({len(doc_names)}): {', '.join(doc_names)}"
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
             f"Return ONLY a valid JSON object, no commentary."
