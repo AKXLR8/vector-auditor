@@ -69,7 +69,7 @@ PROFILES: dict[str, _Profile] = {
     ),
     "minimax": _Profile(
         name="Minimax M3 (NVIDIA)",
-        base_url="https://integrate.api.nvidia.com/v1",
+        base_url=(os.getenv("LLM_BASE_URL") or "https://integrate.api.nvidia.com/v1").rstrip("/"),
         model="minimaxai/minimax-m3",
         modes={
             "black_box": _ModeParams(temperature=0.1, max_tokens=4096,
