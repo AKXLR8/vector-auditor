@@ -466,7 +466,7 @@ class DocumentAgent:
         )
         logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
         try:
-            raw = await self.llm.chat(prompt, system="You are a helpful assistant. Answer in plain paragraphs only — no headings, labels, or section titles of any kind.", mode="white_box")
+            raw = await self.llm.chat(prompt, system="You are a helpful assistant. Answer in plain paragraphs only — no headings, labels, or section titles of any kind.", mode="black_box")
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
             raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))

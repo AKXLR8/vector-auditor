@@ -167,8 +167,7 @@ def _get_profile(name: Optional[str] = None) -> _Profile:
             base_url=base_url,
             model=model,
             modes={
-                "black_box": _ModeParams(temperature=0.1, max_tokens=4096,
-                    extra={"thinking": {"type": "enabled"}}),
+                "black_box": _ModeParams(temperature=0.1, max_tokens=2048),
                 "white_box": _ModeParams(temperature=0.1, max_tokens=16384,
                     extra={"thinking": {"type": "enabled"}}),
                 "analyze":  _ModeParams(temperature=0.1, max_tokens=16384,
