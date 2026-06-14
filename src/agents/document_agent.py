@@ -455,16 +455,15 @@ class DocumentAgent:
             seen_docs.setdefault(key, c.source)
         doc_names = sorted(seen_docs.values())
         is_multi = len(doc_names) > 1
+        # Let the query drive the output structure instead of a rigid template
         structure_instruction = (
-            "summary, key_findings (array of 4-7), methodology, "
-            "research_gaps (array of 2-4), contradictions (array), open_questions (array of 2-3), "
-            "limitations, confidence ('high'|'moderate'|'low')"
+            "Output a JSON object whose top-level keys match the user's question. "
+            "For example: a question about 'research gaps' should produce keys like "
+            "research_gaps, summary, key_findings; a general analysis should include "
+            "summary, key_findings, methodology, research_gaps, contradictions, "
+            "open_questions, limitations, confidence ('high'|'moderate'|'low'). "
+            "Include only keys relevant to the question — don't force unrelated sections."
         )
-        if is_multi:
-            structure_instruction += (
-                ", cross_document_comparison (object with keys: common_themes, differences, "
-                "complementary_insights), per_document_summary (object keyed by filename with short summary)"
-            )
         docs_analyzed = sorted({c.source for c in citations})
         doc_ids_with_data = sorted({c.document_id for c in citations if c.document_id})
         prompt = (
