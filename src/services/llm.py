@@ -167,10 +167,18 @@ class LLM:
     async def chat(self, prompt: str, system: Optional[str] = None, mode: str = "black_box",
                    temperature: Optional[float] = None, max_tokens: Optional[int] = None,
                    **overrides) -> str:
-        return await self._cb.call(
-            self._do_chat_with_retry, prompt, system=system, mode=mode,
-            temperature=temperature, max_tokens=max_tokens, **overrides
-        )
+        try:
+            return await self._cb.call(
+                self._do_chat_with_retry, prompt, system=system, mode=mode,
+                temperature=temperature, max_tokens=max_tokens, **overrides
+            )
+        except (CircuitBreakerOpenError, LLMError) as e:
+            if self.profile.model != "mercury-2":
+                logger.warning("Falling back to mercury after %s error: %s", type(e).__name__, e)
+                fallback = LLM(profile="mercury")
+                return await fallback.chat(prompt, system=system, mode=mode,
+                                           temperature=temperature, max_tokens=max_tokens, **overrides)
+            raise
 
     @retry_with_backoff(max_retries=2, base_delay_s=0.5, retryable_exceptions=(httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError))
     async def _do_chat_with_retry(self, prompt: str, system: Optional[str] = None, mode: str = "black_box",
@@ -199,6 +207,13 @@ class LLM:
                        temperature: Optional[float] = None, max_tokens: Optional[int] = None,
                        **overrides) -> AsyncIterator[str]:
         if not self._cb.is_available():
+            if self.profile.model != "mercury-2":
+                logger.warning("Circuit open for %s, falling back to mercury stream", self.profile.name)
+                fallback = LLM(profile="mercury")
+                async for chunk in fallback.astream(prompt, system=system, mode=mode,
+                                                     temperature=temperature, max_tokens=max_tokens, **overrides):
+                    yield chunk
+                return
             logger.warning("LLM circuit is OPEN — streaming unavailable")
             yield "The LLM service is temporarily unavailable. Please try again shortly."
             return
@@ -225,6 +240,13 @@ class LLM:
                         except (json.JSONDecodeError, KeyError, IndexError):
                             continue
         except Exception as e:
+            if self.profile.model != "mercury-2":
+                logger.warning("Falling back to mercury stream after error: %s", e)
+                fallback = LLM(profile="mercury")
+                async for chunk in fallback.astream(prompt, system=system, mode=mode,
+                                                     temperature=temperature, max_tokens=max_tokens, **overrides):
+                    yield chunk
+                return
             logger.error("LLM.astream failed: %s", e)
             await self._cb.call(lambda: (_ for _ in ()).throw(e))
             raise
