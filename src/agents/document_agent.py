@@ -211,6 +211,32 @@ class DocumentAgent:
             return []
 
     @staticmethod
+    def _strip_headers(text: str) -> str:
+        lines = text.split("\n")
+        out = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                out.append("")
+                continue
+            # Skip markdown headings like ## Summary, ### Caveats
+            if re.match(r"^#{1,6}\s+\S", stripped):
+                continue
+            # Skip bold-header lines like **Summary** or **Key Findings**
+            if re.match(r"^\*\*.+\*\*:?\s*$", stripped):
+                continue
+            # Skip standalone label lines like "Summary", "Summary:", "Key Findings", "Analysis"
+            # Only strip short lines (<100 chars) to avoid matching normal sentences
+            if len(stripped) < 100 and re.match(r"^(Summary|Key Findings?|Analysis|Caveats?|Methodology|Limitations?|Research Gaps?|Gaps?|Conclusion|Discussion|Introduction|Background|Results?|Findings?|Overview|Related Work|Future Work)(\s|[:.]|$)", stripped, re.I):
+                continue
+            # Skip numbered sub-headers acting as section titles (e.g. "1. Long Sequence Handling")
+            # Only strip short lines (<120 chars) to avoid matching numbered content
+            if len(stripped) < 120 and re.match(r"^\d+[\.\)]\s+[A-Z]", stripped):
+                continue
+            out.append(line)
+        return "\n".join(out).strip()
+
+    @staticmethod
     def _is_greeting(text: str) -> bool:
         return bool(re.match(r"^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|sup|howdy|yo)\b", text.strip(), re.I))
 
@@ -458,16 +484,15 @@ class DocumentAgent:
         is_multi = len(doc_names) > 1
         prompt = (
             f"Based on the following document excerpts, answer the user's question. "
-            f"Respond in plain paragraphs only — NO headers, NO sections, NO bullet points, "
-            f"NO bold text, NO numbered lists, NO formatting of any kind. "
-            f"Just write natural prose."
+            f"Begin your answer directly — do not use any titles, headings, labels, or section breaks. "
+            f"Write only plain paragraphs separated by blank lines."
             f"\n\nDocuments analyzed ({len(doc_names)}): {', '.join(doc_names)}"
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
             f"Answer:"
         )
         logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
         try:
-            raw = await self.llm.chat(prompt, system="You are a helpful assistant. Answer in plain text with no structure, headers, or formatting.", mode="analyze")
+            raw = await self.llm.chat(prompt, system="You are a helpful assistant. Answer in plain paragraphs only — no headings, labels, or section titles of any kind.", mode="white_box")
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
             raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))
@@ -482,8 +507,9 @@ class DocumentAgent:
                 documents_analyzed=docs_analyzed if not is_multi else doc_ids_with_data or docs_analyzed,
             )
         logger.info("analyze_document: LLM raw response length=%d chars", len(raw))
+        cleaned = self._strip_headers(raw)
         return DocumentAnalysis(
-            summary=raw,
+            summary=cleaned,
             citations=citations,
             documents_analyzed=doc_ids_with_data or docs_analyzed,
         )
