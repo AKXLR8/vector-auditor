@@ -118,8 +118,12 @@ class LLM:
         suffix = "/chat/completions"
         if self.base_url.endswith(suffix):
             self.base_url = self.base_url[:-len(suffix)]
-        self.api_key = api_key or get_secret("LLM_API_KEY") or get_secret("INCEPTION_API_KEY") or os.getenv("LLM_API_KEY") or os.getenv("INCEPTION_API_KEY")
+        if self.profile.model == "mercury-2":
+            self.api_key = api_key or get_secret("INCEPTION_API_KEY") or os.getenv("INCEPTION_API_KEY")
+        else:
+            self.api_key = api_key or get_secret("LLM_API_KEY") or os.getenv("LLM_API_KEY")
         if not self.api_key:
+            raise RuntimeError(f"No API key found for {self.profile.name}. Set INCEPTION_API_KEY or LLM_API_KEY accordingly.")
             raise RuntimeError("No LLM API key found. Set LLM_API_KEY or INCEPTION_API_KEY in .env")
         self._cb = CircuitBreaker(name="llm", failure_threshold=5, recovery_timeout_s=30.0)
 
