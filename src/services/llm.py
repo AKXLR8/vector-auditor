@@ -146,7 +146,7 @@ PROFILES: dict[str, _Profile] = {
     ),
 }
 
-_DEFAULT_PROFILE = os.getenv("LLM_PROVIDER", "custom" if os.getenv("LLM_MODEL") else "mercury")
+_DEFAULT_PROFILE = os.getenv("LLM_PROVIDER", "mercury")
 
 
 def _get_profile(name: Optional[str] = None) -> _Profile:
