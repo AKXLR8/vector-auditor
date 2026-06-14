@@ -67,66 +67,6 @@ PROFILES: dict[str, _Profile] = {
                 extra={"reasoning_effort": "medium", "reasoning_summary": False}),
         },
     ),
-    "gpt5-mini": _Profile(
-        name="GPT-5 Mini",
-        base_url="https://api.openai.com/v1",
-        model="gpt-5-mini",
-        modes={
-            "black_box": _ModeParams(temperature=0.3, max_tokens=4096),
-            "white_box": _ModeParams(temperature=0.3, max_tokens=8192),
-            "analyze":  _ModeParams(temperature=0.3, max_tokens=8192),
-            "verify":  _ModeParams(temperature=0.3, max_tokens=4096),
-            "gaps":   _ModeParams(temperature=0.3, max_tokens=4096),
-        },
-    ),
-    "gpt5": _Profile(
-        name="GPT-5",
-        base_url="https://api.openai.com/v1",
-        model="gpt-5",
-        modes={
-            "black_box": _ModeParams(temperature=0.3, max_tokens=4096),
-            "white_box": _ModeParams(temperature=0.3, max_tokens=16384),
-            "analyze":  _ModeParams(temperature=0.3, max_tokens=16384),
-            "verify":  _ModeParams(temperature=0.3, max_tokens=4096),
-            "gaps":   _ModeParams(temperature=0.3, max_tokens=4096),
-        },
-    ),
-    "claude-haiku": _Profile(
-        name="Claude Haiku",
-        base_url="https://api.anthropic.com/v1",
-        model="claude-3.5-haiku-latest",
-        modes={
-            "black_box": _ModeParams(temperature=0.3, max_tokens=4096),
-            "white_box": _ModeParams(temperature=0.3, max_tokens=8192),
-            "analyze":  _ModeParams(temperature=0.3, max_tokens=8192),
-            "verify":  _ModeParams(temperature=0.3, max_tokens=4096),
-            "gaps":   _ModeParams(temperature=0.3, max_tokens=4096),
-        },
-    ),
-    "claude-opus": _Profile(
-        name="Claude Opus",
-        base_url="https://api.anthropic.com/v1",
-        model="claude-opus-4-5-latest",
-        modes={
-            "black_box": _ModeParams(temperature=0.3, max_tokens=4096),
-            "white_box": _ModeParams(temperature=0.3, max_tokens=16384),
-            "analyze":  _ModeParams(temperature=0.3, max_tokens=16384),
-            "verify":  _ModeParams(temperature=0.3, max_tokens=4096),
-            "gaps":   _ModeParams(temperature=0.3, max_tokens=4096),
-        },
-    ),
-    "openrouter": _Profile(
-        name="OpenRouter (auto)",
-        base_url="https://openrouter.ai/api/v1",
-        model="openrouter/auto",
-        modes={
-            "black_box": _ModeParams(temperature=0.3, max_tokens=4096),
-            "white_box": _ModeParams(temperature=0.3, max_tokens=8192),
-            "analyze":  _ModeParams(temperature=0.3, max_tokens=8192),
-            "verify":  _ModeParams(temperature=0.3, max_tokens=4096),
-            "gaps":   _ModeParams(temperature=0.3, max_tokens=4096),
-        },
-    ),
     "minimax": _Profile(
         name="Minimax M3 (NVIDIA)",
         base_url="https://integrate.api.nvidia.com/v1",
@@ -154,30 +94,6 @@ def _get_profile(name: Optional[str] = None) -> _Profile:
     p = PROFILES.get(key)
     if p:
         return p
-    if key == "custom":
-        model = os.getenv("LLM_MODEL") or "unknown"
-        raw_base = os.getenv("LLM_BASE_URL") or "https://integrate.api.nvidia.com/v1"
-        base_url = raw_base.rstrip("/")
-        suffix = "/chat/completions"
-        if base_url.endswith(suffix):
-            base_url = base_url[:-len(suffix)]
-        logger.info("Building custom profile: model=%s base_url=%s", model, base_url)
-        return _Profile(
-            name=f"Custom ({model})",
-            base_url=base_url,
-            model=model,
-            modes={
-                "black_box": _ModeParams(temperature=0.1, max_tokens=2048),
-                "white_box": _ModeParams(temperature=0.1, max_tokens=16384,
-                    extra={"thinking": {"type": "enabled"}}),
-                "analyze":  _ModeParams(temperature=0.1, max_tokens=16384,
-                    extra={"thinking": {"type": "enabled"}}),
-                "verify":  _ModeParams(temperature=0.1, max_tokens=4096,
-                    extra={"thinking": {"type": "enabled"}}),
-                "gaps":   _ModeParams(temperature=0.1, max_tokens=4096,
-                    extra={"thinking": {"type": "enabled"}}),
-            },
-        )
     logger.warning("Unknown LLM profile %r, falling back to mercury", key)
     return PROFILES["mercury"]
 
@@ -195,7 +111,7 @@ class LLM:
         # Resolve profile (may come from LLM_PROVIDER env or LLM_MODEL → "custom")
         self.profile = _get_profile(profile)
         # Env var overrides take priority over profile values
-        self.model = os.getenv("LLM_MODEL") or model or self.profile.model
+        self.model = model or self.profile.model
         raw = os.getenv("LLM_BASE_URL") or base_url or self.profile.base_url
         self.base_url = raw.rstrip("/")
         # Allow LLM_BASE_URL to contain the full path; strip /chat/completions
@@ -327,13 +243,4 @@ def get_llm(profile: Optional[str] = None) -> LLM:
 
 
 def list_profiles() -> list[dict]:
-    out = [{"key": k, "name": p.name, "model": p.model, "base_url": p.base_url} for k, p in PROFILES.items()]
-    # Include env-based custom profile if configured
-    if os.getenv("LLM_MODEL"):
-        out.append({
-            "key": "custom",
-            "name": f"Custom ({os.getenv('LLM_MODEL')})",
-            "model": os.getenv("LLM_MODEL"),
-            "base_url": os.getenv("LLM_BASE_URL") or "(env LLM_BASE_URL not set)",
-        })
-    return out
+    return [{"key": k, "name": p.name, "model": p.model, "base_url": p.base_url} for k, p in PROFILES.items()]
