@@ -47,7 +47,7 @@ CMD alembic upgrade head || echo "alembic skipped (in-memory fallback)"; \
     exec uvicorn src.api.main:app \
         --host 0.0.0.0 \
         --port 7860 \
-        --workers 8 \
+        --workers 1 \
         --loop asyncio \
         --http httptools \
         --no-access-log
