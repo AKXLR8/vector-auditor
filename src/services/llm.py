@@ -272,7 +272,8 @@ class LLM:
                         temperature: Optional[float] = None, max_tokens: Optional[int] = None,
                         **overrides) -> str:
         payload = self._build_payload(prompt, system, mode, temperature, max_tokens, **overrides)
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        timeout = 300.0
+        async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=self._headers)
             if r.status_code != 200:
                 body = (await r.aread())[:500].decode("utf-8", "ignore")
@@ -292,8 +293,9 @@ class LLM:
             return
         payload = self._build_payload(prompt, system, mode, temperature, max_tokens, **overrides)
         payload["stream"] = True
+        timeout = 600.0
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=self._headers) as r:
                     if r.status_code != 200:
                         body = await r.aread()
