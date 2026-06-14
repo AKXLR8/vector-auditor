@@ -112,8 +112,7 @@ class LLM:
         self.profile = _get_profile(profile)
         # Env var overrides take priority over profile values
         self.model = model or self.profile.model
-        raw = os.getenv("LLM_BASE_URL") or base_url or self.profile.base_url
-        self.base_url = raw.rstrip("/")
+        self.base_url = self.profile.base_url.rstrip("/")
         # Allow LLM_BASE_URL to contain the full path; strip /chat/completions
         # since callers append it.
         suffix = "/chat/completions"
