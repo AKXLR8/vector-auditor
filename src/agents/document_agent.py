@@ -331,6 +331,12 @@ class DocumentAgent:
                 "reasoning_path": reasoning_path,
             }
 
+            yield {
+                "type": "status",
+                "content": "it may take a while to generate cuz it's using Max reasoning on CPU hardware",
+                "query_id": query_id,
+            }
+
             sys = SYSTEM_WHITE_BOX if req.mode == Mode.white_box else SYSTEM_BLACK_BOX
             ctx_lines = [f"[{i+1}] (source={c.source}, location={c.location})\n{c.quote}" for i, c in enumerate(all_citations)]
             ctx_block = "\n\n".join(ctx_lines) if ctx_lines else "(no context)"
