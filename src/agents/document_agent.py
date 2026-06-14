@@ -16,7 +16,6 @@ from typing import Optional
 
 from ..models.schemas import (
     Citation,
-    CrossDocComparison,
     DocumentAnalysis,
     MessageHistory,
     Mode,
@@ -453,29 +452,21 @@ class DocumentAgent:
         for c in citations:
             key = _norm(c.source)
             seen_docs.setdefault(key, c.source)
-        doc_names = sorted(seen_docs.values())
-        is_multi = len(doc_names) > 1
-        # Let the query drive the output structure — answer ONLY what was asked
-        structure_instruction = (
-            "Output a JSON object whose keys are precisely the topics the user asked about. "
-            "For example, if the user asks about 'research gaps', the JSON should have "
-            "a single key 'research_gaps' containing a detailed, structured, well-reasoned "
-            "analysis. Do NOT add summary, key_findings, analysis, caveats, or any other "
-            "keys unless the question explicitly asks for them. Only include keys "
-            "directly matching the user's request."
-        )
         docs_analyzed = sorted({c.source for c in citations})
         doc_ids_with_data = sorted({c.document_id for c in citations if c.document_id})
+        doc_names = sorted({c.source for c in citations})
+        is_multi = len(doc_names) > 1
         prompt = (
             f"Based on the following document excerpts, answer the user's question "
-            f"as a detailed JSON object. {structure_instruction}"
+            f"in a detailed, structured, well-reasoned manner. "
+            f"Do NOT include a summary section — directly address what was asked."
             f"\n\nDocuments analyzed ({len(doc_names)}): {', '.join(doc_names)}"
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
-            f"Return ONLY a valid JSON object, no commentary."
+            f"Answer:"
         )
         logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
         try:
-            raw = await self.llm.chat(prompt, system="You are a research analyst. Output JSON only.", mode="analyze")
+            raw = await self.llm.chat(prompt, system="You are a research analyst. Answer the user's question directly and thoroughly.", mode="analyze")
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
             raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))
@@ -489,63 +480,9 @@ class DocumentAgent:
                 citations=citations,
                 documents_analyzed=docs_analyzed if not is_multi else doc_ids_with_data or docs_analyzed,
             )
-        logger.info("analyze_document: LLM raw response length=%d chars, preview=%.300s", len(raw), raw)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        data: dict = {}
-        if m:
-            try:
-                data = json.loads(m.group(0))
-                logger.info("analyze_document: parsed JSON with keys=%s", list(data.keys()))
-            except json.JSONDecodeError as e:
-                logger.warning("analyze_document: JSON parse error: %s", e)
-                data = {}
-        # Normalize fields that should be strings but LLM might return as list
-        for field in ("limitations", "methodology", "summary"):
-            if isinstance(data.get(field), list):
-                data[field] = "\n".join(f"- {item}" for item in data[field])
-        # Normalize fields that should be lists but LLM might return as single string
-        for field in ("key_findings", "research_gaps", "contradictions", "open_questions"):
-            if isinstance(data.get(field), str):
-                data[field] = [data[field]]
-        # Normalize confidence
-        conf = data.get("confidence", "moderate")
-        if not isinstance(conf, str):
-            conf = str(conf) if conf is not None else "moderate"
-        data["confidence"] = conf
-        # Ensure summary exists (frontend expects it); derive from query if missing
-        if "summary" not in data:
-            q = (question or focus)[:120]
-            data["summary"] = f"Analysis of: {q}"
-        # Wire in cross_document_comparison and per_document_summary
-        cross_doc = data.get("cross_document_comparison")
-        if isinstance(cross_doc, dict):
-            for f in ("common_themes", "differences", "complementary_insights"):
-                if isinstance(cross_doc.get(f), str):
-                    cross_doc[f] = [cross_doc[f]]
-            data["cross_document_comparison"] = CrossDocComparison(**cross_doc)
-        else:
-            data.pop("cross_document_comparison", None)
-        pd_summary = data.get("per_document_summary")
-        if isinstance(pd_summary, dict):
-            data["per_document_summary"] = {str(k): str(v) for k, v in pd_summary.items()}
-        else:
-            data.pop("per_document_summary", None)
-        if not data:
-            logger.warning("analyze_document: no valid JSON in LLM response, using fallback")
-            data = {"summary": raw[:500], "key_findings": [], "methodology": "",
-                    "research_gaps": [], "contradictions": [], "open_questions": [],
-                    "limitations": "Could not parse structured output.", "confidence": "low"}
-        logger.info("analyze_document: final summary=%.200s doc_analyzed=%s n_citations=%d",
-                     data.get("summary", ""), doc_ids_with_data or docs_analyzed, len(citations))
+        logger.info("analyze_document: LLM raw response length=%d chars", len(raw))
         return DocumentAnalysis(
-            summary=data.get("summary", ""),
-            key_findings=data.get("key_findings", []),
-            methodology=data.get("methodology", ""),
-            research_gaps=data.get("research_gaps", []),
-            contradictions=data.get("contradictions", []),
-            open_questions=data.get("open_questions", []),
-            limitations=data.get("limitations", ""),
-            confidence=data.get("confidence", "moderate"),
+            summary=raw,
             citations=citations,
             documents_analyzed=doc_ids_with_data or docs_analyzed,
         )
