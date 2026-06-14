@@ -455,14 +455,16 @@ class DocumentAgent:
             seen_docs.setdefault(key, c.source)
         doc_names = sorted(seen_docs.values())
         is_multi = len(doc_names) > 1
-        # Let the query drive the output structure instead of a rigid template
+        # Let the query drive the output structure — answer what was asked, nothing else
         structure_instruction = (
-            "Output a JSON object whose top-level keys match the user's question. "
-            "For example: a question about 'research gaps' should produce keys like "
-            "research_gaps, summary, key_findings; a general analysis should include "
-            "summary, key_findings, methodology, research_gaps, contradictions, "
-            "open_questions, limitations, confidence ('high'|'moderate'|'low'). "
-            "Include only keys relevant to the question — don't force unrelated sections."
+            "Output a JSON object whose keys directly answer the user's question. "
+            "Do NOT include a 'summary' key unless the question explicitly asks for one. "
+            "Instead, use descriptive keys that match the query topic (e.g., research_gaps, "
+            "key_findings, methodology, limitations, contradictions, open_questions, "
+            "confidence ('high'|'moderate'|'low')). Each value must be a detailed, "
+            "structured, well-reasoned response — use arrays of strings for multi-item "
+            "topics, and single strings for narrative sections. Include only keys relevant "
+            "to the question — don't force unrelated sections."
         )
         docs_analyzed = sorted({c.source for c in citations})
         doc_ids_with_data = sorted({c.document_id for c in citations if c.document_id})
@@ -512,6 +514,10 @@ class DocumentAgent:
         if not isinstance(conf, str):
             conf = str(conf) if conf is not None else "moderate"
         data["confidence"] = conf
+        # Ensure summary exists (frontend expects it); derive from query if missing
+        if "summary" not in data:
+            q = (question or focus)[:120]
+            data["summary"] = f"Analysis of: {q}"
         # Wire in cross_document_comparison and per_document_summary
         cross_doc = data.get("cross_document_comparison")
         if isinstance(cross_doc, dict):
