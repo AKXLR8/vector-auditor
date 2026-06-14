@@ -44,10 +44,15 @@ def download_reranker():
     if target.exists():
         logger.info("Reranker PKL already exists, skipping")
         return
-    # Skip build-time caching — the reranker is ~1.1 GB and causes OOM during
-    # serialization in the constrained build environment. It will lazy-load at
-    # runtime (16 GB RAM available) via _ensure_reranker() in Qdrant.py.
-    logger.info("Skipping reranker pre-cache (lazy-loaded at runtime)")
+    # Download raw HF snapshot (weight files only, no model load into RAM)
+    # so CrossEncoder finds it in cache at runtime instead of downloading.
+    from huggingface_hub import constants, snapshot_download
+    cache_dir = str(MODELS_DIR / "hf_cache")
+    logger.info("Downloading BAAI/bge-reranker-base snapshot to %s ...", cache_dir)
+    t0 = time.monotonic()
+    snapshot_download("BAAI/bge-reranker-base", cache_dir=cache_dir)
+    total_mb = sum(f.stat().st_size for f in Path(cache_dir).rglob("*") if f.is_file()) / (1024 * 1024)
+    logger.info("Reranker snapshot downloaded (%.1f MB) in %.2fs", total_mb, time.monotonic() - t0)
 
 
 def main() -> None:

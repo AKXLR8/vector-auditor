@@ -25,6 +25,10 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app/models models/
 
+# Pre-downloaded HF cache for reranker (avoids runtime download)
+ENV HF_HOME=/app/models/hf_cache \
+    HF_HUB_CACHE=/app/models/hf_cache/hub
+
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY src/ src/
