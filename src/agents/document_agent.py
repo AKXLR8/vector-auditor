@@ -211,32 +211,6 @@ class DocumentAgent:
             return []
 
     @staticmethod
-    def _strip_headers(text: str) -> str:
-        lines = text.split("\n")
-        out = []
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                out.append("")
-                continue
-            # Skip markdown headings like ## Summary, ### Caveats
-            if re.match(r"^#{1,6}\s+\S", stripped):
-                continue
-            # Skip bold-header lines like **Summary** or **Key Findings**
-            if re.match(r"^\*\*.+\*\*:?\s*$", stripped):
-                continue
-            # Skip standalone label lines like "Summary", "Summary:", "Key Findings", "Analysis"
-            # Only strip short lines (<100 chars) to avoid matching normal sentences
-            if len(stripped) < 100 and re.match(r"^(Summary|Key Findings?|Analysis|Caveats?|Methodology|Limitations?|Research Gaps?|Gaps?|Conclusion|Discussion|Introduction|Background|Results?|Findings?|Overview|Related Work|Future Work)(\s|[:.]|$)", stripped, re.I):
-                continue
-            # Skip numbered sub-headers acting as section titles (e.g. "1. Long Sequence Handling")
-            # Only strip short lines (<120 chars) to avoid matching numbered content
-            if len(stripped) < 120 and re.match(r"^\d+[\.\)]\s+[A-Z]", stripped):
-                continue
-            out.append(line)
-        return "\n".join(out).strip()
-
-    @staticmethod
     def _is_greeting(text: str) -> bool:
         return bool(re.match(r"^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|sup|howdy|yo)\b", text.strip(), re.I))
 
@@ -507,9 +481,8 @@ class DocumentAgent:
                 documents_analyzed=docs_analyzed if not is_multi else doc_ids_with_data or docs_analyzed,
             )
         logger.info("analyze_document: LLM raw response length=%d chars", len(raw))
-        cleaned = self._strip_headers(raw)
         return DocumentAnalysis(
-            summary=cleaned,
+            summary=raw,
             citations=citations,
             documents_analyzed=doc_ids_with_data or docs_analyzed,
         )
