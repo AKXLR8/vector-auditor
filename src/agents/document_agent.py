@@ -499,6 +499,10 @@ class DocumentAgent:
             except json.JSONDecodeError as e:
                 logger.warning("analyze_document: JSON parse error: %s", e)
                 data = {}
+        # Normalize fields that should be strings but LLM might return as list
+        for field in ("limitations", "methodology", "summary"):
+            if isinstance(data.get(field), list):
+                data[field] = "\n".join(f"- {item}" for item in data[field])
         if not data:
             logger.warning("analyze_document: no valid JSON in LLM response, using fallback")
             data = {"summary": raw[:500], "key_findings": [], "methodology": "",
