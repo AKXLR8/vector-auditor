@@ -85,8 +85,7 @@ SYSTEM_WHITE_BOX = (
     "context blocks. CRITICAL: Only valid citation numbers are the ones shown "
     "in the Context section below (e.g., [1], [2], [3], ...). Never use citation "
     "numbers outside this range. If the context is insufficient, say so explicitly. "
-    "Structure your answer with clear sections: Summary, Key Findings, Analysis, "
-    "and Caveats. Be precise and concise."
+    "Be precise and concise."
 )
 
 SYSTEM_BLACK_BOX = (
