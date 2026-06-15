@@ -59,5 +59,8 @@ python-json-logger>=2.0.7
 # ── Production server ───────────────────────────────────────────────
 gunicorn>=23.0.0
 
+# ── LLM API clients (optional, imported per-endpoint) ──────────────────────
+openai>=1.55.0
+
 # ── File storage (optional) ─────────────────────────────────────────
 cloudinary>=1.0.0

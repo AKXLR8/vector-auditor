@@ -88,6 +88,8 @@ from ..models.schemas import (
     MFASetupResponse,
     MFAVerifyRequest,
     Mode,
+    NexAGIRequest,
+    NexAGIResponse,
     OAuthConfigResponse,
     QueryRequest,
     QueryResponse,
@@ -899,6 +901,37 @@ def create_app() -> FastAPI:
     async def cache_flush(request: Request, user=Depends(require_role("admin"))):
         await get_cache().flush_pattern("")
         return {"status": "cache_flushed"}
+
+    # ── NexAGI (OpenRouter reasoning) ────────────────────────────────────
+
+    @app.post("/NexAGI")
+    async def nex_agi(body: NexAGIRequest, request: Request):
+        from openai import OpenAI
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+        extra = {"reasoning": {"enabled": body.reasoning}} if body.reasoning else {}
+        try:
+            resp = await asyncio.to_thread(
+                lambda: client.chat.completions.create(
+                    model=body.model,
+                    messages=[m.model_dump() for m in body.messages],
+                    extra_body=extra,
+                )
+            )
+        except Exception as e:
+            logger.error("NexAGI error: %s", e)
+            raise HTTPException(status_code=502, detail=str(e))
+        choice = resp.choices[0]
+        msg = choice.message
+        usage = {"prompt_tokens": resp.usage.prompt_tokens, "completion_tokens": resp.usage.completion_tokens, "total_tokens": resp.usage.total_tokens} if resp.usage else None
+        return NexAGIResponse(
+            content=msg.content,
+            reasoning_details=msg.reasoning_details.model_dump() if getattr(msg, "reasoning_details", None) else None,
+            model=resp.model,
+            usage=usage,
+        )
 
     # ── Wire shutdown manager ─────────────────────────────────────────────
 

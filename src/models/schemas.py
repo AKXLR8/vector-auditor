@@ -290,3 +290,21 @@ class DLQItem(BaseModel):
 
 class DLQResponse(BaseModel):
     dead_letter_queue: list[DLQItem] = []
+
+
+# ── NexAGI ────────────────────────────────────────────────────────────────
+
+class NexAGIMessage(BaseModel):
+    role: str
+    content: str
+
+class NexAGIRequest(BaseModel):
+    messages: list[NexAGIMessage]
+    model: str = "nex-agi/nex-n2-pro:free"
+    reasoning: bool = True
+
+class NexAGIResponse(BaseModel):
+    content: str | None = None
+    reasoning_details: Optional[dict] = None
+    model: str = ""
+    usage: Optional[dict] = None
