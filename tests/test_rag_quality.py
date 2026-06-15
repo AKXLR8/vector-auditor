@@ -1,5 +1,9 @@
 """Deepeval tests for RAG answer quality."""
 import asyncio
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pytest
 from deepeval import assert_test
 from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
