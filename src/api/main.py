@@ -916,7 +916,7 @@ def create_app() -> FastAPI:
             resp = await asyncio.to_thread(
                 lambda: client.chat.completions.create(
                     model=body.model,
-                    messages=[m.model_dump() for m in body.messages],
+                    messages=[m.model_dump(exclude_none=True) for m in body.messages],
                     extra_body=extra,
                 )
             )
@@ -928,7 +928,7 @@ def create_app() -> FastAPI:
         usage = {"prompt_tokens": resp.usage.prompt_tokens, "completion_tokens": resp.usage.completion_tokens, "total_tokens": resp.usage.total_tokens} if resp.usage else None
         return NexAGIResponse(
             content=msg.content,
-            reasoning_details=msg.reasoning_details.model_dump() if getattr(msg, "reasoning_details", None) else None,
+            reasoning_details=[r.model_dump() for r in msg.reasoning_details] if getattr(msg, "reasoning_details", None) else None,
             model=resp.model,
             usage=usage,
         )

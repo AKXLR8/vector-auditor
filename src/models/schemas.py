@@ -296,7 +296,8 @@ class DLQResponse(BaseModel):
 
 class NexAGIMessage(BaseModel):
     role: str
-    content: str
+    content: str | None = None
+    reasoning_details: Optional[list[dict]] = None
 
 class NexAGIRequest(BaseModel):
     messages: list[NexAGIMessage]
