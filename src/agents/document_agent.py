@@ -31,6 +31,44 @@ from ..vectorstore.Qdrant import get_vector_store
 
 logger = logging.getLogger("rga_auditor.agent")
 
+_EXPECTED_KEYS = {"summary", "key_findings", "methodology", "research_gaps",
+                   "contradictions", "open_questions", "limitations", "confidence"}
+
+
+def _parse_analysis_json(raw: str) -> dict | None:
+    """Try to extract a JSON dict from LLM output. Handles code fences and trailing noise."""
+    s = raw.strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    s = s.strip()
+    if not s:
+        return None
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not any(k in data for k in _EXPECTED_KEYS):
+        return None
+    if not isinstance(data.get("key_findings"), list):
+        data["key_findings"] = []
+    if not isinstance(data.get("research_gaps"), list):
+        data["research_gaps"] = []
+    if not isinstance(data.get("contradictions"), list):
+        data["contradictions"] = []
+    if not isinstance(data.get("open_questions"), list):
+        data["open_questions"] = []
+    if not isinstance(data.get("summary"), str):
+        data["summary"] = ""
+    if not isinstance(data.get("methodology"), str):
+        data["methodology"] = ""
+    if not isinstance(data.get("limitations"), str):
+        data["limitations"] = ""
+    if data.get("confidence") not in ("high", "moderate", "low"):
+        data["confidence"] = "moderate"
+    return data
+
 
 def _sanitize_citations(answer: str, max_citation: int) -> str:
     """Remove citation references [N] where N > max_citation (hallucinated)."""
@@ -462,16 +500,19 @@ class DocumentAgent:
         doc_names = sorted({c.source for c in citations})
         is_multi = len(doc_names) > 1
         prompt = (
-            f"Based on the following document excerpts, answer the user's question. "
-            f"Begin your answer directly — do not use any titles, headings, labels, or section breaks. "
-            f"Write only plain paragraphs separated by blank lines."
+            f"Based on the following document excerpts, analyze the topic. "
+            f"Return valid JSON with keys: summary, key_findings (list), methodology (str), "
+            f"research_gaps (list), contradictions (list), open_questions (list), "
+            f"limitations (str), confidence (high|moderate|low). "
+            f"Make each list at least 2-3 items where applicable. "
+            f"Do NOT wrap in markdown code fences — return raw JSON only."
             f"\n\nDocuments analyzed ({len(doc_names)}): {', '.join(doc_names)}"
             f"\n\nQuestion/focus: {focus}\n\nContext:\n{ctx}\n\n"
-            f"Answer:"
+            f"JSON:"
         )
         logger.info("analyze_document: calling LLM with context length=%d chars", len(ctx))
         try:
-            raw = await self.llm.chat(prompt, system="You are a helpful assistant. Answer in plain paragraphs only — no headings, labels, or section titles of any kind.", mode="black_box")
+            raw = await self.llm.chat(prompt, system="You are a research analyst. Output valid JSON only, no markdown.", mode="analyze")
         except (CircuitBreakerOpenError, LLMError) as e:
             logger.warning("LLM unavailable for analyze_document: %s — returning raw-context analysis", e)
             raw_citations = "\n\n".join(f"[{i+1}] **{c.source}**" + (f" (p. {c.page})" if c.page else "") + f":\n  {c.quote[:300]}" for i, c in enumerate(citations[:10]))
@@ -486,8 +527,23 @@ class DocumentAgent:
                 documents_analyzed=docs_analyzed if not is_multi else doc_ids_with_data or docs_analyzed,
             )
         logger.info("analyze_document: LLM raw response length=%d chars", len(raw))
+        parsed = _parse_analysis_json(raw)
+        if parsed is None:
+            logger.warning("analyze_document: failed to parse LLM output as JSON — storing raw in summary")
+            return DocumentAnalysis(
+                summary=raw,
+                citations=citations,
+                documents_analyzed=doc_ids_with_data or docs_analyzed,
+            )
         return DocumentAnalysis(
-            summary=raw,
+            summary=parsed.get("summary", raw),
+            key_findings=parsed.get("key_findings", []),
+            methodology=parsed.get("methodology", ""),
+            research_gaps=parsed.get("research_gaps", []),
+            contradictions=parsed.get("contradictions", []),
+            open_questions=parsed.get("open_questions", []),
+            limitations=parsed.get("limitations", ""),
+            confidence=parsed.get("confidence", "moderate"),
             citations=citations,
             documents_analyzed=doc_ids_with_data or docs_analyzed,
         )
