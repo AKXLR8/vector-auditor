@@ -928,7 +928,7 @@ def create_app() -> FastAPI:
         usage = {"prompt_tokens": resp.usage.prompt_tokens, "completion_tokens": resp.usage.completion_tokens, "total_tokens": resp.usage.total_tokens} if resp.usage else None
         return NexAGIResponse(
             content=msg.content,
-            reasoning_details=[r.model_dump() for r in msg.reasoning_details] if getattr(msg, "reasoning_details", None) else None,
+            reasoning_details=msg.reasoning_details if getattr(msg, "reasoning_details", None) else None,
             model=resp.model,
             usage=usage,
         )
