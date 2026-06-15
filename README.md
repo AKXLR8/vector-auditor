@@ -28,7 +28,7 @@ https://vector-auditor-frontend.vercel.app
   <img src="https://img.shields.io/badge/GitHub-OAuth-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub OAuth"/>
 </p>
 
-**No LangChain.** Two LLM providers (Mercury-2 via Inception Labs, Minimax-M3 via NVIDIA), Qdrant vector store, Postgres persistence, Redis caching, and circuit-breaker resilience.
+**No LangChain.** Three LLM tiers: RAG-grounded (Mercury-2, Minimax-M3) and free-form reasoning chat (NexAGI via OpenRouter). Qdrant vector store, Postgres persistence, Redis caching, circuit-breaker resilience.
 
 ## Demo
 
@@ -39,7 +39,7 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 
 ## Features
 
-- **Two LLM Providers** — Mercury-2 (Inception Labs, fast) and Minimax-M3 (NVIDIA, reasoning-heavy); auto-fallback on failure
+- **Three LLM Tiers** — Mercury-2 (Inception Labs, fast), Minimax-M3 (NVIDIA, reasoning-heavy) for RAG; NexAGI (OpenRouter, `nex-agi/nex-n2-pro:free`) for free-form reasoning chat with chain-of-thought continuation
 - **Structured Document Analysis** — `POST /analyze` returns full report with summary, key findings, methodology, research gaps, contradictions, open questions, limitations
 - **Semantic Search** — `all-MiniLM-L6-v2` embeddings (384-d) for meaning-based retrieval
 - **Cross-Encoder Reranker** — `BAAI/bge-reranker-base` re-scores 10 candidates → top 5 before LLM
@@ -106,6 +106,10 @@ graph TB
     Degrade["Graceful Degradation<br/>auto-fallback mercury → minimax"]
   end
 
+  subgraph "Free-Form Chat (No RAG)"
+    NexAGI["NexAGI<br/>POST /NexAGI<br/>nex-agi/nex-n2-pro:free<br/>via OpenRouter<br/>(OPENROUTER_API_KEY)"]
+  end
+
   subgraph "Infrastructure"
     PG[("PostgreSQL<br/>(Qdrant Cloud or in-memory fallback)")]
     Redis[("Redis<br/>(session cache)")]
@@ -138,6 +142,8 @@ graph TB
   MINIMAX --> Retry
   MINIMAX --> Guard
 
+  API --> NexAGI
+
   API --> PG
   API --> Redis
   API --> Metrics
@@ -150,6 +156,7 @@ graph TB
   classDef process fill:#111827,stroke:#2dd4bf,color:#f0fdfa
   classDef vector fill:#22092C,stroke:#f59e0b,color:#fff7ed
   classDef llm fill:#1e1b4b,stroke:#a78bfa,color:#f5f3ff
+  classDef chat fill:#1c1917,stroke:#f97316,color:#fff7ed
   classDef infra fill:#1c1917,stroke:#d4d4d8,color:#f5f5f4
 
   class User,FE client
@@ -157,6 +164,7 @@ graph TB
   class Parser,PII,Cloud,Chunker process
   class Qdrant,Embedder,CB_Q vector
   class Agent,Reranker,MERCURY,MINIMAX,CB_L,Retry,Guard,Degrade llm
+  class NexAGI chat
   class PG,Redis,JobQ,Metrics,Cache,Shutdown,TokenCounter infra
 ```
 
@@ -171,7 +179,7 @@ graph TB
 | Vector Store | Qdrant (Cloud / local / in-memory, collection `documents`) |
 | Reranker | Cross-Encoder BAAI/bge-reranker-base |
 | Embeddings | SentenceTransformers all-MiniLM-L6-v2 (384-d) |
-| LLM | Mercury-2 (Inception Labs) · Minimax-M3 (NVIDIA) |
+| LLM | Mercury-2 (Inception Labs) · Minimax-M3 (NVIDIA) · NexAGI (OpenRouter, `nex-agi/nex-n2-pro:free`) |
 | Cache | Redis / in-process TTLCache |
 | File Store | Cloudinary (PDF serving) |
 | PDF Parse | MarkItDown (text) + pdfplumber (page numbers) |
@@ -205,6 +213,7 @@ Open http://localhost:8000/docs for interactive API docs.
 | `LLM_API_KEY` | Yes | — | NVIDIA API key (used for Minimax-M3) |
 | `INCEPTION_API_KEY` | Yes | — | Inception Labs API key (used for Mercury-2) |
 | `JWT_SECRET_KEY` | Yes | — | `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `OPENROUTER_API_KEY` | No | — | API key for NexAGI free-form reasoning chat |
 | `LLM_BASE_URL` | No | NVIDIA endpoint | Base URL for Minimax-M3 provider |
 | `DATABASE_URL` | No | in-memory | PostgreSQL with asyncpg |
 | `QDRANT_URL` | No | in-memory | Qdrant Cloud URL |
@@ -220,7 +229,7 @@ Open http://localhost:8000/docs for interactive API docs.
 `POST register` · `POST login` · `POST login/mfa` · `POST logout` · `GET token/refresh` · `POST mfa/setup` · `POST mfa/verify` · `GET oauth/config` · `POST oauth/github`
 
 ### Query `/query`
-`POST /query` — single answer with citations · `POST /query/stream` — SSE streaming · `POST /analyze` — multi-document analysis
+`POST /query` — single answer with citations · `POST /query/stream` — SSE streaming · `POST /analyze` — multi-document analysis · `POST /NexAGI` — free-form reasoning chat (no RAG)
 
 ### Documents `/documents`
 `POST /documents` — upload (multi-file) · `GET /documents` — list · `GET /documents/{id}` — detail · `DELETE /documents/{id}` — remove · `GET /documents/{id}/pdf` — stream PDF
@@ -229,7 +238,7 @@ Open http://localhost:8000/docs for interactive API docs.
 `GET /sessions` — list · `POST /sessions` — create · `GET /sessions/{id}` — detail with messages · `PUT /sessions/{id}` — rename · `DELETE /sessions/{id}` · `GET /sessions/{id}/messages` · `POST /sessions/{id}/messages`
 
 ### Operations
-`POST /feedback` · `GET /admin/dlq` · `POST /cache/flush` · `GET /health` · `GET /readyz` · `GET /metrics`
+`POST /NexAGI` · `POST /feedback` · `GET /admin/dlq` · `POST /cache/flush` · `GET /health` · `GET /readyz` · `GET /metrics`
 
 ## Deploy
 
