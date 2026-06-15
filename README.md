@@ -28,7 +28,7 @@ https://vector-auditor-frontend.vercel.app
   <img src="https://img.shields.io/badge/GitHub-OAuth-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub OAuth"/>
 </p>
 
-A FastAPI backend with a lite RAG pipeline (no LangChain), Qdrant vector store, Postgres persistence, Redis caching, and circuit-breaker resilience.
+**No LangChain.** Two LLM providers (Mercury-2 via Inception Labs, Minimax-M3 via NVIDIA), Qdrant vector store, Postgres persistence, Redis caching, and circuit-breaker resilience.
 
 ## Demo
 
@@ -39,13 +39,15 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 
 ## Features
 
+- **Two LLM Providers** — Mercury-2 (Inception Labs, fast) and Minimax-M3 (NVIDIA, reasoning-heavy); auto-fallback on failure
+- **Structured Document Analysis** — `POST /analyze` returns full report with summary, key findings, methodology, research gaps, contradictions, open questions, limitations
 - **Semantic Search** — `all-MiniLM-L6-v2` embeddings (384-d) for meaning-based retrieval
 - **Cross-Encoder Reranker** — `BAAI/bge-reranker-base` re-scores 10 candidates → top 5 before LLM
 - **Cited Grounding** — inline `[N]` markers with page-level citations from pdfplumber, click to jump
 - **Section-Aware Chunking** — 1000-char windows with 200-char overlap, split by markdown headers
 - **Multi-Document Q&A** — select any subset of uploaded PDFs, scoped answers
-- **AI-Powered Answers** — Inception Labs Mercury-2 via OpenAI-compatible endpoint, strict source grounding
-- **PII Redaction** — Presidio analyzer scans all uploads (enabled by default)
+- **AI-Powered Answers** — grounded in source documents with verification + gap analysis
+- **PII Redaction** — Presidio analyzer; skips PERSON, LOCATION, ORGANIZATION (only contact/financial IDs masked)
 - **Multi-Hop Retrieval** — iterative search across 3 hops for comprehensive coverage
 - **Two modes** — `white_box` (full reasoning + verification + gap analysis) and `black_box` (temperature=0)
 - **Parallel uploads** — 5 concurrent jobs with SHA256 dedup & Cloudinary storage
@@ -73,7 +75,7 @@ graph TB
     FE["Frontend (separate repo)"]
   end
 
-  subgraph "HF Spaces (Docker, 4 workers)"
+  subgraph "HF Spaces (Docker, 1 worker)"
     API["FastAPI App<br/>src/api/main.py"]
     MW["Middleware<br/>Logging · CORS · Auth"]
     Auth["Auth Service<br/>JWT · GitHub OAuth"]
@@ -96,11 +98,12 @@ graph TB
   subgraph "LLM / RAG"
     Agent["Document Agent<br/>src/agents/document_agent.py"]
     Reranker["Cross-Encoder Reranker<br/>BAAI/bge-reranker-base"]
-    LLM["LLM Service<br/>Mercury-2 via Inception Labs"]
+    MERCURY["Fast Mode<br/>Mercury-2 via Inception Labs<br/>(INCEPTION_API_KEY)"]
+    MINIMAX["Reasoning Mode<br/>Minimax-M3 via NVIDIA<br/>(LLM_API_KEY / LLM_BASE_URL)"]
     CB_L["Circuit Breaker<br/>5 failures / 30s recovery"]
     Retry["Retry w/ Backoff<br/>0.5s → 1s → 2s"]
     Guard["Guardrails<br/>NeMo Guardrails"]
-    Degrade["Graceful Degradation<br/>context-only fallback"]
+    Degrade["Graceful Degradation<br/>auto-fallback mercury → minimax"]
   end
 
   subgraph "Infrastructure"
@@ -126,11 +129,14 @@ graph TB
   API --> Agent
   Agent --> Qdrant
   Agent --> Reranker
-  Reranker --> LLM
-  Agent --> LLM
-  LLM --> CB_L --> Degrade
-  LLM --> Retry
-  LLM --> Guard
+  Agent --> MERCURY
+  Agent --> MINIMAX
+  MERCURY --> CB_L --> Degrade
+  MERCURY --> Retry
+  MERCURY --> Guard
+  MINIMAX --> CB_L
+  MINIMAX --> Retry
+  MINIMAX --> Guard
 
   API --> PG
   API --> Redis
@@ -150,7 +156,7 @@ graph TB
   class API,MW,Auth,Rate api
   class Parser,PII,Cloud,Chunker process
   class Qdrant,Embedder,CB_Q vector
-  class Agent,Reranker,LLM,CB_L,Retry,Guard,Degrade llm
+  class Agent,Reranker,MERCURY,MINIMAX,CB_L,Retry,Guard,Degrade llm
   class PG,Redis,JobQ,Metrics,Cache,Shutdown,TokenCounter infra
 ```
 
@@ -165,14 +171,14 @@ graph TB
 | Vector Store | Qdrant (Cloud / local / in-memory, collection `documents`) |
 | Reranker | Cross-Encoder BAAI/bge-reranker-base |
 | Embeddings | SentenceTransformers all-MiniLM-L6-v2 (384-d) |
-| LLM | OpenAI-compatible (Inception Labs mercury-2) |
+| LLM | Mercury-2 (Inception Labs) · Minimax-M3 (NVIDIA) |
 | Cache | Redis / in-process TTLCache |
 | File Store | Cloudinary (PDF serving) |
 | PDF Parse | MarkItDown (text) + pdfplumber (page numbers) |
-| Resilience | Circuit breakers + exponential backoff retry + LRU query cache |
+| Resilience | Circuit breakers + exponential backoff retry + LRU query cache + auto-fallback between models |
 | Observability | JSON logs + Prometheus |
 | Rate Limiting | slowapi (200/min default) |
-| Workers | 4 uvicorn workers |
+| Workers | 1 uvicorn worker (prevent OOM on HF Spaces) |
 
 ```bash
 # Clone
@@ -196,8 +202,10 @@ Open http://localhost:8000/docs for interactive API docs.
 
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|
-| `LLM_API_KEY` | Yes | — | Inception Labs or OpenAI-compatible key |
+| `LLM_API_KEY` | Yes | — | NVIDIA API key (used for Minimax-M3) |
+| `INCEPTION_API_KEY` | Yes | — | Inception Labs API key (used for Mercury-2) |
 | `JWT_SECRET_KEY` | Yes | — | `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `LLM_BASE_URL` | No | NVIDIA endpoint | Base URL for Minimax-M3 provider |
 | `DATABASE_URL` | No | in-memory | PostgreSQL with asyncpg |
 | `QDRANT_URL` | No | in-memory | Qdrant Cloud URL |
 | `QDRANT_API_KEY` | No | — | Qdrant Cloud API key |
