@@ -306,6 +306,6 @@ class NexAGIRequest(BaseModel):
 
 class NexAGIResponse(BaseModel):
     content: str | None = None
-    reasoning_details: Optional[dict] = None
+    reasoning_details: Optional[list[dict]] = None
     model: str = ""
     usage: Optional[dict] = None
