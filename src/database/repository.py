@@ -254,7 +254,7 @@ async def list_documents(session: Optional[AsyncSession], user_id: Optional[str]
 
 async def get_document_by_sha256(session: AsyncSession, sha256: str) -> Optional[dict]:
     r = await session.execute(select(Document).where(Document.sha256 == sha256))
-    d = r.scalar_one_or_none()
+    d = r.scalars().first()
     return _doc_to_dict(d) if d else None
 
 
