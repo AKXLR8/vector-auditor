@@ -461,9 +461,10 @@ class DocumentAgent:
         if len(req_doc_ids) > 1:
             per_doc = max(3, 12 // len(req_doc_ids))
             logger.info("analyze_document: multi-doc mode (%d docs), per_doc=%d", len(req_doc_ids), per_doc)
+            tasks = [self._retrieve(user_id, question or "key findings and methodology", [did], per_doc) for did in req_doc_ids]
+            results = await asyncio.gather(*tasks)
             citations: list[Citation] = []
-            for did in req_doc_ids:
-                part = await self._retrieve(user_id, question or "key findings and methodology", [did], per_doc)
+            for part, did in zip(results, req_doc_ids):
                 logger.info("analyze_document: retrieved %d citations for doc=%s", len(part), did)
                 citations.extend(part)
             if citations:
