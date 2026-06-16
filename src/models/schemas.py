@@ -304,6 +304,7 @@ class NexAGIRequest(BaseModel):
     messages: list[NexAGIMessage]
     model: str = "nex-agi/nex-n2-pro:free"
     reasoning: bool = True
+    max_tokens: Optional[int] = Field(default=None, ge=100, le=128000)
 
 class NexAGIResponse(BaseModel):
     content: str | None = None

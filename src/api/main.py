@@ -887,14 +887,17 @@ def create_app() -> FastAPI:
         if not api_key:
             raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
         client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-        extra = {"reasoning": {"enabled": body.reasoning}} if body.reasoning else {}
         try:
+            kwargs = {
+                "model": body.model,
+                "messages": [m.model_dump(exclude_none=True) for m in body.messages],
+            }
+            if body.max_tokens is not None:
+                kwargs["max_tokens"] = body.max_tokens
+            if body.reasoning:
+                kwargs["extra_body"] = {"reasoning": {"enabled": True}}
             resp = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model=body.model,
-                    messages=[m.model_dump(exclude_none=True) for m in body.messages],
-                    extra_body=extra,
-                )
+                lambda: client.chat.completions.create(**kwargs)
             )
         except Exception as e:
             logger.error("NexAGI error: %s", e)
