@@ -1013,11 +1013,11 @@ def set_upload_processor() -> None:
                 if pii:
                     loop = asyncio.get_running_loop()
                     sample = text[:100_000]
-                    detected = await loop.run_in_executor(None, pii.detect, sample)
+                    detected = await loop.run_in_executor(None, pii.detect, sample, True)
                     if detected:
                         has_pii = True
                         original_len = len(text)
-                        text = await loop.run_in_executor(None, pii.anonymize, text)
+                        text = await loop.run_in_executor(None, pii.anonymize, text, True)
                         logger.info("PII: anonymized %s (%d chars → %d chars, entities=%s)",
                                      record.filename, original_len, len(text), detected)
                     else:

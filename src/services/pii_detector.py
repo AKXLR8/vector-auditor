@@ -31,24 +31,25 @@ class PIIDetector:
         except Exception as e:
             logger.warning("PII detection unavailable: %s", e)
 
-    def _filter(self, results: list) -> list:
-        return [r for r in results if r.entity_type not in _SKIP_ENTITIES]
+    def _filter(self, results: list, strict: bool = False) -> list:
+        skip = set() if strict else _SKIP_ENTITIES
+        return [r for r in results if r.entity_type not in skip]
 
-    def detect(self, text: str) -> list[dict[str, Any]]:
+    def detect(self, text: str, strict: bool = False) -> list[dict[str, Any]]:
         if self._analyzer is None:
             return []
         try:
             results = self._analyzer.analyze(text=text, language="en")
-            return [r.to_dict() for r in self._filter(results)]
+            return [r.to_dict() for r in self._filter(results, strict)]
         except Exception as e:
             logger.warning("PII detect failed: %s", e)
             return []
 
-    def anonymize(self, text: str) -> str:
+    def anonymize(self, text: str, strict: bool = False) -> str:
         if self._analyzer is None or self._anonymizer is None:
             return text
         try:
-            results = self._filter(self._analyzer.analyze(text=text, language="en"))
+            results = self._filter(self._analyzer.analyze(text=text, language="en"), strict)
             return self._anonymizer.anonymize(text=text, analyzer_results=results).text
         except Exception as e:
             logger.warning("PII anonymize failed: %s", e)
