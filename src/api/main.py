@@ -1007,11 +1007,10 @@ def set_upload_processor() -> None:
             name_lower = (record.filename or "").lower()
             if name_lower.endswith(".pdf"):
                 from ..services.document_parser import parse_pdf_with_pages
-                pdf_text, pr, has_pii = await asyncio.gather(
+                (pdf_text, pr), has_pii = await asyncio.gather(
                     asyncio.to_thread(parse_pdf_with_pages, content),
                     _pii_scan(),
                 )
-                pdf_text, pr = pdf_text
                 if pdf_text.strip():
                     text = pdf_text
                     page_ranges = pr
