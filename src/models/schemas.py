@@ -184,6 +184,7 @@ class DocumentResponse(BaseModel):
     filename: str
     status: str  # "processing" | "ready" | "failed" | "duplicate" | "skipped" | "stuck"
     has_pii: bool = False
+    privacy: bool = False
     sha256: str = ""
     cloudinary_url: Optional[str] = None
     uploaded_by: str

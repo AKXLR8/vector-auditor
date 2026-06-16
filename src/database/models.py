@@ -47,6 +47,7 @@ class Document(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     has_pii: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    privacy: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     cloudinary_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     cloudinary_public_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)

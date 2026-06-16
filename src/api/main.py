@@ -199,6 +199,7 @@ def _doc_response(d: dict, base_url: str = "") -> DocumentResponse:
         filename=d.get("filename", ""),
         status=d.get("status", "processing"),
         has_pii=d.get("has_pii", False),
+        privacy=d.get("privacy", False),
         sha256=d.get("sha256") or "",
         cloudinary_url=cu,
         uploaded_by=d.get("uploaded_by", ""),
@@ -565,6 +566,7 @@ def create_app() -> FastAPI:
                     filename=safe,
                     status=status,
                     sha256=digest,
+                    privacy=privacy,
                 )
             if not is_duplicate:
                 record = JobRecord(
