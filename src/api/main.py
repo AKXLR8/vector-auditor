@@ -474,14 +474,6 @@ def create_app() -> FastAPI:
         if not allowed:
             raise HTTPException(status_code=400, detail=refusal or "blocked by guardrails")
         result = await agent.query(user["id"], body)
-        if result:
-            gr = get_guardrails()
-            loop = asyncio.get_running_loop()
-            if result.answer:
-                result.answer = await loop.run_in_executor(None, gr.anonymize, result.answer)
-            for cit in result.citations:
-                if cit.quote:
-                    cit.quote = await loop.run_in_executor(None, gr.anonymize, cit.quote)
         return result
 
     @app.post("/query/stream")
@@ -497,11 +489,6 @@ def create_app() -> FastAPI:
         async def event_gen():
             try:
                 async for event in agent.stream_query(user["id"], body):
-                    # Anonymize PII in text chunks
-                    text = event.get("text", "")
-                    if text:
-                        loop = asyncio.get_running_loop()
-                        event["text"] = await loop.run_in_executor(None, get_guardrails().anonymize, text)
                     yield f"data: {json.dumps(event)}\n\n"
             except Exception as e:
                 err = json.dumps({"type": "error", "detail": str(e)[:500]})
@@ -524,21 +511,6 @@ def create_app() -> FastAPI:
         agent = _get_agent()
         try:
             result = await agent.analyze_document(user["id"], body.question, body.document_ids, body.max_citations, model=body.model)
-            # Anonymize PII in all text fields
-            gr = get_guardrails()
-            loop = asyncio.get_running_loop()
-            result.summary = await loop.run_in_executor(None, gr.anonymize, result.summary)
-            result.key_findings = [await loop.run_in_executor(None, gr.anonymize, f) for f in result.key_findings]
-            result.methodology = await loop.run_in_executor(None, gr.anonymize, result.methodology)
-            result.research_gaps = [await loop.run_in_executor(None, gr.anonymize, g) for g in result.research_gaps]
-            result.contradictions = [await loop.run_in_executor(None, gr.anonymize, c) for c in result.contradictions]
-            result.open_questions = [await loop.run_in_executor(None, gr.anonymize, q) for q in result.open_questions]
-            result.limitations = await loop.run_in_executor(None, gr.anonymize, result.limitations)
-            for cit in result.citations:
-                if cit.quote:
-                    cit.quote = await loop.run_in_executor(None, gr.anonymize, cit.quote)
-            if result.per_document_summary:
-                result.per_document_summary = {k: await loop.run_in_executor(None, gr.anonymize, v) for k, v in result.per_document_summary.items()}
             logger.info("ANALYZE response: summary=%.200s doc_ids=%s len(citations)=%d",
                          result.summary, result.documents_analyzed, len(result.citations))
             return result
