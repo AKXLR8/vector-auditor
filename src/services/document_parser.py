@@ -30,21 +30,21 @@ def parse_pdf(content: bytes) -> str:
 
 def parse_pdf_with_pages(content: bytes) -> tuple[str, list[dict]]:
     """Parse PDF and return (full_text, page_ranges) where page_ranges
-    contains {start, end, page} character-offset-to-page mappings."""
-    import pdfplumber
+    contains {start, end, page} character-offset-to-page mappings.
+    Uses pypdf (faster than pdfplumber for text extraction)."""
+    from pypdf import PdfReader
     pages: list[dict] = []
     texts: list[str] = []
     offset = 0
-    with pdfplumber.open(io.BytesIO(content)) as pdf:
-        for i, page in enumerate(pdf.pages):
-            t = (page.extract_text() or "").strip()
-            if t:
-                start = offset
-                texts.append(t)
-                offset += len(t)
-                pages.append({"start": start, "end": offset, "page": i + 1})
-                t += "\n\n"
-                offset += 2  # separator
+    reader = PdfReader(io.BytesIO(content))
+    for i, page in enumerate(reader.pages):
+        t = (page.extract_text() or "").strip()
+        if t:
+            texts.append(t)
+            start = offset
+            offset += len(t)
+            pages.append({"start": start, "end": offset, "page": i + 1})
+            offset += 2  # separator
     full_text = "\n\n".join(texts)
     return full_text, pages
 

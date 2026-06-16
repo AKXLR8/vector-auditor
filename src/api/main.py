@@ -1013,7 +1013,7 @@ def set_upload_processor() -> None:
                     _pii_scan(),
                 )
                 md_text, (pdf_text, pr), has_pii = results
-                # Use pdfplumber text for chunking — page mapping is guaranteed accurate
+                # Use pypdf text for chunking — page mapping is guaranteed accurate
                 text = pdf_text if pdf_text.strip() else md_text
                 page_ranges = pr
                 logger.info("UPLOAD: parsed PDF %s → %d chars (MarkItDown) + %d chars (pdfplumber, used) + %d pages in %.2fs",
