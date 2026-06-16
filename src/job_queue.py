@@ -45,6 +45,7 @@ class JobRecord:
     document_id: str = ""
     filename: str = ""
     content_path: str = ""
+    privacy: bool = False
     stage: str = STAGE_UPLOADING
     progress: int = 0
     attempts: int = 0

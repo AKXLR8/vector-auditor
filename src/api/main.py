@@ -21,6 +21,7 @@ from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     Request,
     Response,
@@ -552,7 +553,7 @@ def create_app() -> FastAPI:
 
     @app.post("/documents", response_model=UploadResponse, status_code=201)
     @limiter.limit("10/minute")
-    async def upload_documents(request: Request, files: list[UploadFile] = File(...), user=Depends(current_user)):
+    async def upload_documents(request: Request, files: list[UploadFile] = File(...), privacy: bool = Form(False), user=Depends(current_user)):
         sf = get_session_factory()
 
         async def _process_one(f: UploadFile) -> UploadedDocument:
@@ -600,6 +601,7 @@ def create_app() -> FastAPI:
                     document_id=doc_id,
                     filename=safe,
                     content_path=str(target),
+                    privacy=privacy,
                 )
                 await get_worker().enqueue(record)
             return UploadedDocument(upload_id=upload_id, document_id=doc_id, filename=safe, status=status)
@@ -989,55 +991,41 @@ def set_upload_processor() -> None:
             has_pii: bool = False
             from ..services.document_parser import parse_document
 
-            # Run PII detection concurrently with document parsing
-            async def _pii_scan() -> bool:
-                from ..services.pii_detector import get_pii_detector
-                pii_detector = get_pii_detector()
-                if not pii_detector or not getattr(pii_detector, "enabled", True):
-                    return False
-                try:
-                    sample = content[:100_000].decode("utf-8", errors="ignore")
-                    result = bool(pii_detector.detect(sample))
-                    logger.info("PII: scan result for %s = %s (sample=%d chars)", record.filename, result, len(sample))
-                    return result
-                except Exception as e:
-                    logger.warning("PII: scan failed for %s: %s", record.filename, e)
-                    return False
-
             name_lower = (record.filename or "").lower()
             if name_lower.endswith(".pdf"):
                 from ..services.document_parser import parse_pdf_with_pages
-                (pdf_text, pr), has_pii = await asyncio.gather(
-                    asyncio.to_thread(parse_pdf_with_pages, content),
-                    _pii_scan(),
-                )
+                pdf_text, pr = await asyncio.to_thread(parse_pdf_with_pages, content)
                 if pdf_text.strip():
                     text = pdf_text
                     page_ranges = pr
                 else:
-                    from ..services.document_parser import parse_document
                     text = await asyncio.to_thread(parse_document, record.filename, content)
                     page_ranges = pr
                 logger.info("UPLOAD: parsed PDF %s → %d chars (pypdf, used) in %.2fs",
                              record.filename, len(text), time.time() - _t1)
             else:
-                text, has_pii = await asyncio.gather(
-                    asyncio.to_thread(parse_document, record.filename, content),
-                    _pii_scan(),
-                )
+                text = await asyncio.to_thread(parse_document, record.filename, content)
                 logger.info("UPLOAD: parsed %s → %d chars in %.2fs", record.filename, len(text), time.time() - _t1)
-            # Anonymize text + page texts if PII was detected (applies to both PDF and non-PDF paths)
-            if has_pii and text:
+            # Anonymize PII only when privacy flag is set
+            if record.privacy and text:
                 from ..services.pii_detector import get_pii_detector
                 pii = get_pii_detector()
                 if pii:
                     loop = asyncio.get_running_loop()
-                    original_len = len(text)
-                    text = await loop.run_in_executor(None, pii.anonymize, text)
-                    if len(text) != original_len:
-                        logger.info("PII: anonymized %s (%d chars → %d chars)", record.filename, original_len, len(text))
+                    sample = text[:100_000]
+                    detected = await loop.run_in_executor(None, pii.detect, sample)
+                    if detected:
+                        has_pii = True
+                        original_len = len(text)
+                        text = await loop.run_in_executor(None, pii.anonymize, text)
+                        logger.info("PII: anonymized %s (%d chars → %d chars, entities=%s)",
+                                     record.filename, original_len, len(text), detected)
                     else:
-                        logger.info("PII: scan flagged but no entities anonymized for %s", record.filename)
+                        logger.info("PII: scan found no entities for %s", record.filename)
+                else:
+                    logger.info("PII: detector not available for %s", record.filename)
+            else:
+                logger.info("UPLOAD: privacy=False, skipping PII for %s", record.filename)
             await get_worker().queue.update(record.id, stage="chunking", progress=40)
             await get_worker().queue.update(record.id, stage="embedding", progress=60)
             _t2 = time.time()
