@@ -47,7 +47,7 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 - **Section-Aware Chunking** — 1000-char windows with 200-char overlap, split by markdown headers
 - **Multi-Document Q&A** — select any subset of uploaded PDFs, scoped answers
 - **AI-Powered Answers** — grounded in source documents with verification + gap analysis
-- **PII Redaction** — Presidio analyzer; skips PERSON, LOCATION, ORGANIZATION (only contact/financial IDs masked)
+- **PII Redaction** — Per-upload opt-in (NDA mode); Presidio strict mode masks PERSON, LOCATION, ORG at ingest. Research mode skips PII entirely (zero overhead)
 - **Multi-Hop Retrieval** — iterative search across 3 hops for comprehensive coverage
 - **Two modes** — `white_box` (full reasoning + verification + gap analysis) and `black_box` (temperature=0)
 - **Parallel uploads** — 5 concurrent jobs with SHA256 dedup & Cloudinary storage
@@ -182,7 +182,7 @@ graph TB
 | LLM | Mercury-2 (Inception Labs) · Minimax-M3 (NVIDIA) · NexAGI (OpenRouter, `nex-agi/nex-n2-pro:free`) |
 | Cache | Redis / in-process TTLCache |
 | File Store | Cloudinary (PDF serving) |
-| PDF Parse | MarkItDown (text) + pdfplumber (page numbers) |
+| PDF Parse | pypdf (text) + pdfplumber (page numbers); MarkItDown fallback |
 | Resilience | Circuit breakers + exponential backoff retry + LRU query cache + auto-fallback between models |
 | Observability | JSON logs + Prometheus |
 | Rate Limiting | slowapi (200/min default) |
@@ -271,7 +271,7 @@ docker run -p 7860:7860 -e LLM_API_KEY=... -e JWT_SECRET_KEY=... vector-auditor
 - [x] JSON structured logging
 - [x] Prometheus metrics
 - [x] Dead letter queue for failed uploads
-- [x] PII detection (enabled by default)
+- [x] PII detection (per-upload opt-in via NDA mode)
 - [x] Guardrails against prompt injection
 - [x] JWT auth with role-based access
 - [x] Document isolation per user
