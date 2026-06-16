@@ -1007,17 +1007,20 @@ def set_upload_processor() -> None:
             name_lower = (record.filename or "").lower()
             if name_lower.endswith(".pdf"):
                 from ..services.document_parser import parse_pdf_with_pages
-                results = await asyncio.gather(
-                    asyncio.to_thread(parse_document, record.filename, content),
+                pdf_text, pr, has_pii = await asyncio.gather(
                     asyncio.to_thread(parse_pdf_with_pages, content),
                     _pii_scan(),
                 )
-                md_text, (pdf_text, pr), has_pii = results
-                # Use pypdf text for chunking — page mapping is guaranteed accurate
-                text = pdf_text if pdf_text.strip() else md_text
-                page_ranges = pr
-                logger.info("UPLOAD: parsed PDF %s → %d chars (MarkItDown) + %d chars (pdfplumber, used) + %d pages in %.2fs",
-                             record.filename, len(md_text), len(pdf_text), len(page_ranges or []), time.time() - _t1)
+                pdf_text, pr = pdf_text
+                if pdf_text.strip():
+                    text = pdf_text
+                    page_ranges = pr
+                else:
+                    from ..services.document_parser import parse_document
+                    text = await asyncio.to_thread(parse_document, record.filename, content)
+                    page_ranges = pr
+                logger.info("UPLOAD: parsed PDF %s → %d chars (pypdf, used) in %.2fs",
+                             record.filename, len(text), time.time() - _t1)
             else:
                 text, has_pii = await asyncio.gather(
                     asyncio.to_thread(parse_document, record.filename, content),
