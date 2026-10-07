@@ -138,8 +138,10 @@ class InMemoryJobQueue:
         """On startup, any non-terminal jobs are stale — re-queue them.
         Also requeue DLQ items that have been stuck for >1 hour with retries < 3.
         """
-        from ..database.repository import list_dlq
         from datetime import datetime
+        from src.database.repository import list_dlq, push_dlq
+        from src.api.main import JobRecord
+        from dateutil.parser import isoparse
         async with self._lock:
             n = 0
             for r in self._jobs.values():
@@ -150,9 +152,6 @@ class InMemoryJobQueue:
                     n += 1
             # DLQ auto-retry: requeue items stuck >1hr with <3 retries
             try:
-                from src.database.repository import list_dlq, push_dlq
-                from src.api.main import JobRecord
-                from dateutil.parser import isoparse
                 dlq_items = await list_dlq(None, limit=50)
                 for item in dlq_items:
                     retry_count = item.get("retry_count", 0)
