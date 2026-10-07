@@ -135,7 +135,11 @@ class InMemoryJobQueue:
             self._wake.set()
 
     async def requeue_processing(self) -> int:
-        """On startup, any non-terminal jobs are stale — re-queue them."""
+        """On startup, any non-terminal jobs are stale — re-queue them.
+        Also requeue DLQ items that have been stuck for >1 hour with retries < 3.
+        """
+        from ..database.repository import list_dlq
+        from datetime import datetime
         async with self._lock:
             n = 0
             for r in self._jobs.values():
@@ -144,6 +148,32 @@ class InMemoryJobQueue:
                     r.progress = 0
                     r.next_run_at = datetime.utcnow()
                     n += 1
+            # DLQ auto-retry: requeue items stuck >1hr with <3 retries
+            try:
+                dlq_items = await list_dlq(None, limit=50)
+                for item in dlq_items:
+                    retry_count = item.get("retry_count", 0)
+                    created_at = item.get("created_at")
+                    if retry_count < 3 and created_at:
+                        from dateutil.parser import isoparse
+                        age_hours = (datetime.utcnow() - isoparse(created_at)).total_seconds() / 3600
+                        if age_hours > 1:
+                            # Re-enqueue as new job
+                            from ..api.main import JobRecord
+                            record = JobRecord(
+                                user_id=item.get("user_id", ""),
+                                document_id=item.get("document_id", ""),
+                                filename=item.get("filename", ""),
+                                content_path="",
+                                privacy=False,
+                            )
+                            self._jobs[record.id] = record
+                            n += 1
+                            # Increment retry count in DLQ
+                            from ..database.repository import push_dlq
+                            await push_dlq(None, item["source"], item["error"], item["payload"], item["filename"], retry_count=retry_count + 1)
+            except Exception as e:
+                logger.warning("DLQ auto-retry check failed: %s", e)
             return n
 
     async def get(self, job_id: str) -> Optional[JobRecord]:

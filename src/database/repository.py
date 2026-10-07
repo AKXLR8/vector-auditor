@@ -295,14 +295,14 @@ def _doc_to_dict(d: Document) -> dict:
 
 # ── Dead-letter queue ───────────────────────────────────────────────────────
 
-async def push_dlq(session: Optional[AsyncSession], source: str, error: str, payload: str = "", filename: str = "") -> None:
+async def push_dlq(session: Optional[AsyncSession], source: str, error: str, payload: str = "", filename: str = "", retry_count: int = 0) -> None:
     item = {
         "id": uuid.uuid4().hex,
         "source": source,
         "filename": filename,
         "error": error,
         "payload": payload,
-        "retry_count": 0,
+        "retry_count": retry_count,
         "created_at": datetime.utcnow(),
     }
     if session is not None:
@@ -312,7 +312,7 @@ async def push_dlq(session: Optional[AsyncSession], source: str, error: str, pay
             filename=filename,
             error=error,
             payload=payload,
-            retry_count=0,
+            retry_count=retry_count,
         ))
         await session.commit()
         return

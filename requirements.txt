@@ -8,6 +8,7 @@ python-multipart>=0.0.5
 httpx>=0.27.0
 python-dotenv>=1.0.0
 cachetools>=5.3.0
+aiofiles>=23.0.0
 
 # ── Document Parsing ─────────────────────────────────────────────────
 markitdown[all]>=0.1.0
@@ -25,6 +26,8 @@ boto3>=1.35.0
 qdrant-client>=1.9.0
 sentence-transformers>=3.0.0
 langchain-text-splitters>=0.3.0
+optimum>=1.16.0
+onnxruntime>=1.16.0
 
 # ── Database ─────────────────────────────────────────────────────────
 sqlalchemy[asyncio]>=2.0.0
@@ -55,6 +58,13 @@ tenacity>=8.3.0
 # ── Observability ───────────────────────────────────────────────────
 prometheus-client>=0.20.0
 python-json-logger>=2.0.7
+structlog>=24.0.0
+opentelemetry-api>=1.22.0
+opentelemetry-sdk>=1.22.0
+opentelemetry-instrumentation-fastapi>=0.42b0
+opentelemetry-instrumentation-httpx>=0.42b0
+opentelemetry-instrumentation-sqlalchemy>=0.42b0
+opentelemetry-exporter-otlp>=1.22.0
 
 # ── Production server ───────────────────────────────────────────────
 gunicorn>=23.0.0

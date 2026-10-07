@@ -86,6 +86,19 @@ def parse_document(filename: str, content: bytes) -> str:
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list[str]:
     """Section-aware chunking: prefer splitting on headers, fall back to char windows."""
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
+    # Try markdown header-aware splitting first (works for MD, DOCX via MarkItDown)
+    header_splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=[("#", "h1"), ("##", "h2"), ("###", "h3")]
+    )
+    sections = header_splitter.split_text(text)
+    if len(sections) > 1:
+        # Has headers — chunk within each section
+        splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
+        chunks: list[str] = []
+        for sec in sections:
+            chunks.extend(splitter.split_text(sec.page_content))
+        return chunks
+    # No headers — fall back to recursive character splitting
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
     return splitter.split_text(text)

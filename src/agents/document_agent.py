@@ -314,6 +314,7 @@ class DocumentAgent:
 
         cost = estimate_cost(prompt_tokens, answer_tokens)
         query_id = uuid.uuid4().hex
+        get_metrics().query_latency.observe(time.time() - t0)
         return QueryResponse(
             answer=answer,
             citations=all_citations,

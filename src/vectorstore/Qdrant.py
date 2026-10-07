@@ -17,6 +17,10 @@ logger = logging.getLogger("rga_auditor.qdrant")
 
 MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
 
+# Batch embedding cache: avoids re-embedding same chunks on retry/reindex
+# Key = SHA256 of joined texts, Value = list of vectors
+_batch_embed_cache = TTLCache(maxsize=128, ttl=600)
+
 DEFAULT_MAX_CITATIONS_PER_DOC = int(os.getenv("MAX_CITATIONS_PER_DOC", "6"))
 DEFAULT_MAX_CITATIONS_TOTAL = int(os.getenv("MAX_CITATIONS_TOTAL", "20"))
 DEFAULT_RETRIEVE_K = int(os.getenv("RETRIEVE_K_PER_QUERY", "10"))
@@ -77,16 +81,33 @@ class VectorStore:
             return
         import time
         t0 = time.monotonic()
-        from sentence_transformers import CrossEncoder
-        pkl = MODELS_DIR / "reranker.pkl"
-        if pkl.exists():
-            import joblib
-            self._reranker = joblib.load(str(pkl))
-            logger.info("VectorStore: loaded reranker from %s in %.2fs", pkl, time.monotonic() - t0)
-        else:
-            logger.info("VectorStore: pickle not found at %s — downloading BAAI/bge-reranker-base", pkl)
-            self._reranker = CrossEncoder("BAAI/bge-reranker-base")
-            logger.info("VectorStore: reranker downloaded in %.2fs", time.monotonic() - t0)
+        pkl = MODELS_DIR / "reranker_onnx"
+        try:
+            from optimum.onnxruntime import ORTModelForSequenceClassification
+            from transformers import AutoTokenizer
+            if pkl.exists():
+                self._reranker = ORTModelForSequenceClassification.from_pretrained(str(pkl))
+                self._reranker_tokenizer = AutoTokenizer.from_pretrained(str(pkl))
+                logger.info("VectorStore: loaded ONNX reranker from %s in %.2fs", pkl, time.monotonic() - t0)
+            else:
+                logger.info("VectorStore: exporting BAAI/bge-reranker-base to ONNX at %s", pkl)
+                model = ORTModelForSequenceClassification.from_pretrained("BAAI/bge-reranker-base", export=True)
+                tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-reranker-base")
+                model.save_pretrained(str(pkl))
+                tokenizer.save_pretrained(str(pkl))
+                self._reranker = model
+                self._reranker_tokenizer = tokenizer
+                logger.info("VectorStore: ONNX reranker exported & loaded in %.2fs", time.monotonic() - t0)
+        except Exception as e:
+            logger.warning("ONNX reranker unavailable (%s) — falling back to CrossEncoder", e)
+            from sentence_transformers import CrossEncoder
+            pkl_fallback = MODELS_DIR / "reranker.pkl"
+            if pkl_fallback.exists():
+                import joblib
+                self._reranker = joblib.load(str(pkl_fallback))
+            else:
+                self._reranker = CrossEncoder("BAAI/bge-reranker-base")
+            logger.info("VectorStore: fallback reranker loaded in %.2fs", time.monotonic() - t0)
 
     def _create_collection(self) -> None:
         from qdrant_client.http import models
@@ -111,7 +132,11 @@ class VectorStore:
             self.client.create_payload_index(
                 collection_name=self.collection_name, field_name="document_id", field_schema=models.PayloadSchemaType.KEYWORD
             )
-            logger.info("Created collection %s", self.collection_name)
+            # TEXT index for hybrid BM25 search
+            self.client.create_payload_index(
+                collection_name=self.collection_name, field_name="text", field_schema=models.PayloadSchemaType.TEXT
+            )
+            logger.info("Created collection %s with hybrid search index", self.collection_name)
 
     @staticmethod
     def _map_chunks_to_pages(chunks: list[str], text: str, page_ranges: list[dict]) -> list[int]:
@@ -208,8 +233,21 @@ class VectorStore:
         if document_ids:
             flt.must.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
         logger.info("Qdrant.search: user=%s query=%.80s k=%d doc_ids=%s", user_id, query, k, document_ids)
+        # Hybrid search: vector + BM25 (text index)
+        prefetch = models.Prefetch(
+            query=models.Document(text=query, model="text"),
+            limit=k * 2,
+            using="text",
+            filter=flt,
+        )
         resp = await run_sync(
-            self.client.query_points, collection_name=self.collection_name, query=vec[0], limit=k, query_filter=flt
+            self.client.query_points,
+            collection_name=self.collection_name,
+            query=vec[0],
+            limit=k,
+            query_filter=flt,
+            prefetch=[prefetch],
+            search_params=models.SearchParams(hnsw_ef=128, exact=False),
         )
         n = len(resp.points)
         logger.info("Qdrant.search: got %d points", n)
@@ -239,7 +277,22 @@ class VectorStore:
         t0 = time.monotonic()
         pairs = [(query, c.get("text", "")) for c in candidates]
         from ..services.async_worker import run_sync
-        scores = await run_sync(self._reranker.predict, pairs)
+        # ONNX model uses tokenizer + model.forward, CrossEncoder uses .predict
+        if hasattr(self, "_reranker_tokenizer"):
+            import torch
+            def _onnx_predict(pairs):
+                inputs = self._reranker_tokenizer(
+                    [p[0] for p in pairs],
+                    [p[1] for p in pairs],
+                    padding=True, truncation=True, max_length=512, return_tensors="pt"
+                )
+                with torch.no_grad():
+                    outputs = self._reranker(**inputs)
+                    logits = outputs.logits.squeeze(-1).cpu().numpy()
+                return logits
+            scores = await run_sync(_onnx_predict, pairs)
+        else:
+            scores = await run_sync(self._reranker.predict, pairs)
         for i, c in enumerate(candidates):
             c["rerank_score"] = float(scores[i])
         candidates.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
@@ -288,7 +341,15 @@ def get_vector_store() -> VectorStore:
 
 async def _run_embedding(model, texts: list[str]) -> list:
     from ..services.async_worker import run_sync
+    # Batch-level cache: hash the concatenated texts
+    import hashlib
+    key = hashlib.sha256("|".join(texts).encode()).hexdigest()
+    cached = _batch_embed_cache.get(key)
+    if cached is not None:
+        logger.debug("Embedding cache hit for %d texts", len(texts))
+        return cached
     vec = await run_sync(model.encode, texts, batch_size=128, show_progress_bar=False)
     if hasattr(vec, "tolist"):
         vec = vec.tolist()
+    _batch_embed_cache[key] = vec
     return vec

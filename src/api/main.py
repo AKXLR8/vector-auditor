@@ -208,7 +208,6 @@ def _doc_response(d: dict, base_url: str = "") -> DocumentResponse:
 
 
 def create_app() -> FastAPI:
-    setup_observability()
 
     settings_origins = os.getenv(
         "ALLOWED_ORIGINS",
@@ -218,6 +217,10 @@ def create_app() -> FastAPI:
     origins = [o.strip() for o in settings_origins.split(",") if o.strip()]
 
     app = FastAPI(title=TITLE, description=DESCRIPTION, version=VERSION)
+
+    # Initialize observability with app for OpenTelemetry instrumentation
+    from ..observability import setup_observability
+    setup_observability(app)
 
     app.state.limiter = limiter
     app.add_middleware(RequestContextMiddleware)
@@ -530,21 +533,25 @@ def create_app() -> FastAPI:
         sf = get_session_factory()
 
         async def _process_one(f: UploadFile) -> UploadedDocument:
-            # 1. Read content
-            content = await f.read()
-            if len(content) > MAX_FILE_SIZE:
-                raise HTTPException(status_code=413, detail=f"{f.filename} too large")
             safe = sanitize_filename(f.filename) or "document"
             doc_id = uuid.uuid4().hex
             upload_id = uuid.uuid4().hex
             target = UPLOAD_DIR / f"{doc_id}_{safe}"
 
-            # 2. Write to disk + compute SHA256 (PII runs in job worker)
-            async def _write_and_hash() -> str:
-                target.write_bytes(content)
-                return hashlib.sha256(content).hexdigest()
-
-            digest = await _write_and_hash()
+            # 1. Stream to disk + incremental SHA256 (avoids full file in RAM)
+            import aiofiles
+            hasher = hashlib.sha256()
+            total = 0
+            async with aiofiles.open(target, "wb") as out:
+                while chunk := await f.read(64 * 1024):
+                    total += len(chunk)
+                    if total > MAX_FILE_SIZE:
+                        await out.close()
+                        target.unlink(missing_ok=True)
+                        raise HTTPException(status_code=413, detail=f"{f.filename} too large")
+                    await out.write(chunk)
+                    hasher.update(chunk)
+            digest = hasher.hexdigest()
 
             # 3. Dedup check
             is_duplicate = False
@@ -578,6 +585,10 @@ def create_app() -> FastAPI:
                     privacy=privacy,
                 )
                 await get_worker().enqueue(record)
+                # Invalidate user's query cache so new doc is searchable immediately
+                cache = get_cache()
+                await cache.flush_pattern(f"search:{user['id']}:")
+                await cache.flush_pattern("llm:")
             return UploadedDocument(upload_id=upload_id, document_id=doc_id, filename=safe, status=status)
 
         results = await asyncio.gather(*[_process_one(f) for f in files], return_exceptions=True)
@@ -618,6 +629,10 @@ def create_app() -> FastAPI:
             get_vector_store().delete_document(user["id"], doc_id)
         except Exception as e:
             logger.warning("qdrant delete failed: %s", e)
+        # Invalidate cache on delete
+        cache = get_cache()
+        await cache.flush_pattern(f"search:{user['id']}:")
+        await cache.flush_pattern("llm:")
         return Response(status_code=204)
 
     @app.get("/documents/{doc_id}/pdf")
@@ -1031,10 +1046,12 @@ def set_upload_processor() -> None:
                 except Exception as e:
                     logger.warning("CLOUDINARY: upload failed for %s: %s", record.filename, e)
             get_metrics().uploads_total.labels(status="ok").inc()
+            get_metrics().upload_latency.observe(time.time() - _t0)
             logger.info("UPLOAD: completed %s in %.2fs", record.id, time.time() - _t0)
         except Exception as e:
             logger.exception("UPLOAD: failed for %s after %.2fs: %s", record.id, time.time() - _t0, e)
             get_metrics().uploads_total.labels(status="error").inc()
+            get_metrics().upload_latency.observe(time.time() - _t0)
             sf = get_session_factory()
             if sf is not None:
                 async with sf() as s:

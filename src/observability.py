@@ -1,7 +1,9 @@
-"""JSON logging + Prometheus metrics.
+"""JSON logging + Prometheus metrics + OpenTelemetry tracing.
 
 Set LOG_FORMAT=json (default) for one JSON object per line, ready for
 Loki/CloudWatch/Datadog. Set LOG_FORMAT=text for human-readable.
+
+OTel: Set OTEL_EXPORTER_OTLP_ENDPOINT to enable OTLP export (e.g., http://jaeger:4318/v1/traces).
 """
 import logging
 import os
@@ -11,10 +13,15 @@ from typing import Any
 
 try:
     from pythonjsonlogger import jsonlogger
-
     _HAVE_JSON_LOGGER = True
 except ImportError:
     _HAVE_JSON_LOGGER = False
+
+try:
+    import structlog
+    _HAVE_STRUCTLOG = True
+except ImportError:
+    _HAVE_STRUCTLOG = False
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -28,7 +35,7 @@ from prometheus_client import (
 
 
 def setup_observability(app=None) -> None:
-    """Configure root logger. Idempotent."""
+    """Configure root logger + structlog + OpenTelemetry. Idempotent."""
     level = os.getenv("LOG_LEVEL", "INFO").upper()
     fmt = os.getenv("LOG_FORMAT", "json").lower()
 
@@ -56,6 +63,42 @@ def setup_observability(app=None) -> None:
     # Quiet noisy libraries
     for noisy in ("httpx", "httpcore", "asyncio", "urllib3", "sentence_transformers"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    # structlog: structured logging with request_id context
+    if _HAVE_STRUCTLOG:
+        structlog.configure(
+            processors=[
+                structlog.contextvars.merge_contextvars,
+                structlog.processors.add_log_level,
+                structlog.processors.TimeStamper(fmt="iso"),
+                structlog.processors.JSONRenderer(),
+            ],
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            cache_logger_on_first_use=True,
+        )
+
+    # OpenTelemetry auto-instrumentation
+    otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if otel_endpoint and app is not None:
+        try:
+            from opentelemetry import trace
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+            from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+            from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+            provider = TracerProvider()
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=otel_endpoint)))
+            trace.set_tracer_provider(provider)
+
+            FastAPIInstrumentor.instrument_app(app)
+            HTTPXClientInstrumentor().instrument()
+            SQLAlchemyInstrumentor().instrument()
+            logger.info("OpenTelemetry initialized — exporting to %s", otel_endpoint)
+        except Exception as e:
+            logger.warning("OpenTelemetry init failed: %s", e)
 
 
 # ── Prometheus metrics ───────────────────────────────────────────────────────
@@ -124,6 +167,19 @@ class Metrics:
             "Unix timestamp when the app finished booting",
         )
 
+        # New: upload processing latency (full pipeline)
+        self.upload_latency = Histogram(
+            "rga_upload_latency_seconds",
+            "Upload processing time (extract → chunk → embed → index)",
+            buckets=(1, 5, 10, 30, 60, 120, 300),
+        )
+        # New: query end-to-end latency
+        self.query_latency = Histogram(
+            "rga_query_latency_seconds",
+            "Query end-to-end latency (retrieve → rerank → generate)",
+            buckets=(0.5, 1, 2, 5, 10, 30, 60, 120),
+        )
+
     def observe_request(self, method: str, endpoint: str, status: int, duration_s: float) -> None:
         self.requests_total.labels(method=method, endpoint=endpoint, status=str(status)).inc()
         self.request_duration.labels(method=method, endpoint=endpoint).observe(duration_s)
@@ -142,3 +198,10 @@ def get_metrics() -> Metrics:
 
 def metrics_response() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+
+
+# Convenience: get structlog logger
+def get_logger(name: str = "rga_auditor"):
+    if _HAVE_STRUCTLOG:
+        return structlog.get_logger(name)
+    return logging.getLogger(name)

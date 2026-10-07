@@ -68,19 +68,22 @@ async def init_engine(database_url: Optional[str] = None) -> Optional[AsyncEngin
             connect_args["ssl"] = True
         else:
             connect_args["ssl"] = True
+    # Pool tuning: pre_ping validates connections, recycle prevents stale connections
+    pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
+    max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "5"))
     _engine = create_async_engine(
         url,
-        pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
-        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
+        pool_size=pool_size,
+        max_overflow=max_overflow,
         pool_pre_ping=True,
+        pool_recycle=1800,  # recycle connections every 30 min
         future=True,
         connect_args=connect_args or None,
     )
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False, class_=AsyncSession)
     logger.info(
-        "Database engine ready — pool_size=%s, max_overflow=%s",
-        os.getenv("DB_POOL_SIZE", "5"),
-        os.getenv("DB_MAX_OVERFLOW", "5"),
+        "Database engine ready — pool_size=%d, max_overflow=%d, pool_recycle=1800s",
+        pool_size, max_overflow
     )
     return _engine
 
