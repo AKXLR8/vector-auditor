@@ -1,5 +1,5 @@
 ---
-title: Vector Auditor
+title: VecXAud
 emoji: 🔍
 colorFrom: indigo
 colorTo: blue
@@ -7,10 +7,22 @@ sdk: docker
 pinned: false
 ---
 
-# Vector Auditor 
-https://vector-auditor-frontend.vercel.app
+<p align="center">
+  <img src="docs/logo.png" alt="VecXAud" width="420">
+</p>
 
-**Agentic document intelligence** — upload PDFs, ask questions, get cited answers with page-level citations.
+<h3 align="center">Agentic document intelligence</h3>
+
+<p align="center">
+  Upload PDFs, ask questions, get answers with page-level citations.
+</p>
+
+<p align="center">
+  <a href="https://vector-auditor-frontend.vercel.app"><b>Live Demo</b></a> ·
+  <a href="BACKEND_API.md">API Reference</a> ·
+  <a href="DEPLOY_HF_SPACES.md">Deploy</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11"/>
@@ -26,9 +38,33 @@ https://vector-auditor-frontend.vercel.app
   <img src="https://img.shields.io/badge/Cloudinary-3448C5?style=for-the-badge&logo=cloudinary&logoColor=white" alt="Cloudinary"/>
   <img src="https://img.shields.io/badge/JWT-Auth-000000?style=for-the-badge&logo=jsonwebtokens&logoColor=white" alt="JWT Auth"/>
   <img src="https://img.shields.io/badge/GitHub-OAuth-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub OAuth"/>
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License"/>
 </p>
 
-**No LangChain.** Three LLM tiers: RAG-grounded (Mercury-2, Minimax-M3) and free-form reasoning chat (NexAGI via OpenRouter). Qdrant vector store, Postgres persistence, Redis caching, circuit-breaker resilience.
+---
+
+VecXAud is an open-source RAG backend for technical documents. It parses PDFs,
+chunks and embeds them into a vector store, then answers questions with
+page-level citations — or produces a structured analysis report with findings,
+gaps, and contradictions.
+
+**No LangChain.** Three LLM tiers: RAG-grounded (Mercury-2, Minimax-M3) and
+free-form reasoning chat (NexAGI via OpenRouter). Qdrant vector store,
+Postgres persistence, Redis caching, circuit-breaker resilience.
+
+## Table of Contents
+
+- [Demo](#demo)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [API Overview](#api-overview-28-endpoints)
+- [Deploy](#deploy)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Demo
 
@@ -39,30 +75,44 @@ POST /query  {"question": "What are the key findings?", "mode": "white_box"}
 
 ## Features
 
-- **Three LLM Tiers** — Mercury-2 (Inception Labs, fast), Minimax-M3 (NVIDIA, reasoning-heavy) for RAG; NexAGI (OpenRouter, `nex-agi/nex-n2-pro:free`) for free-form reasoning chat with chain-of-thought continuation
-- **Structured Document Analysis** — `POST /analyze` returns full report with summary, key findings, methodology, research gaps, contradictions, open questions, limitations
-- **Semantic Search** — `all-MiniLM-L6-v2` embeddings (384-d) for meaning-based retrieval
-- **Cross-Encoder Reranker** — `BAAI/bge-reranker-base` re-scores 10 candidates → top 5 before LLM
-- **Cited Grounding** — inline `[N]` markers with page-level citations from pdfplumber, click to jump
-- **Section-Aware Chunking** — 1000-char windows with 200-char overlap, split by markdown headers
+- **Three LLM Tiers** — Mercury-2 (Inception Labs, fast), Minimax-M3 (NVIDIA,
+  reasoning-heavy) for RAG; NexAGI (OpenRouter, `nex-agi/nex-n2-pro:free`) for
+  free-form reasoning chat with chain-of-thought continuation
+- **Structured Document Analysis** — `POST /analyze` returns full report with
+  summary, key findings, methodology, research gaps, contradictions, open
+  questions, limitations
+- **Semantic Search** — `all-MiniLM-L6-v2` embeddings (384-d) for meaning-based
+  retrieval
+- **Cross-Encoder Reranker** — `BAAI/bge-reranker-base` re-scores 10 candidates
+  → top 5 before the LLM
+- **Cited Grounding** — inline `[N]` markers with page-level citations from
+  pdfplumber, click to jump
+- **Section-Aware Chunking** — 1000-char windows with 200-char overlap, split by
+  markdown headers
 - **Multi-Document Q&A** — select any subset of uploaded PDFs, scoped answers
-- **AI-Powered Answers** — grounded in source documents with verification + gap analysis
-- **PII Redaction** — Per-upload opt-in (NDA mode); Presidio strict mode masks PERSON, LOCATION, ORG at ingest. Research mode skips PII entirely (zero overhead)
-- **Multi-Hop Retrieval** — iterative search across 3 hops for comprehensive coverage
-- **Two modes** — `white_box` (full reasoning + verification + gap analysis) and `black_box` (temperature=0)
+- **PII Redaction** — per-upload opt-in (NDA mode); Presidio strict mode masks
+  PERSON, LOCATION, ORG at ingest. Research mode skips PII entirely (zero
+  overhead)
+- **Multi-Hop Retrieval** — iterative search across 3 hops for comprehensive
+  coverage
+- **Two modes** — `white_box` (full reasoning + verification + gap analysis) and
+  `black_box` (temperature=0)
 - **Parallel uploads** — 5 concurrent jobs with SHA256 dedup & Cloudinary storage
-- **Graceful degradation** — circuit breakers on LLM, Qdrant, embedding; raw-context fallback when LLM is down
+- **Graceful degradation** — circuit breakers on LLM, Qdrant, embedding;
+  raw-context fallback when the LLM is down
 - **LRU query cache** — repeated queries skip embedding + vector search (600s TTL)
-- **Guardrails** — NeMo Guardrails with regex fallback for prompt injection detection
+- **Guardrails** — NeMo Guardrails with regex fallback for prompt injection
+  detection
 - **Dead letter queue** — failed uploads captured for replay
-- **Streaming SSE** — `citations` / `token` / `verification` / `gap_analysis` / `done` / `error`
+- **Streaming SSE** — `citations` / `token` / `verification` / `gap_analysis` /
+  `done` / `error`
 - **Multi-user** — JWT auth with GitHub OAuth, document isolation per user
 - **Feedback loop** — thumbs up/down per query
-- **Observability** — JSON structured logs, Prometheus `/metrics`, health `/health`, readiness `/readyz`
-
+- **Observability** — JSON structured logs, Prometheus `/metrics`, health
+  `/health`, readiness `/readyz`
 
 ## Architecture
----
+
 ```mermaid
 ---
 config:
@@ -168,7 +218,6 @@ graph TB
   class PG,Redis,JobQ,Metrics,Cache,Shutdown,TokenCounter infra
 ```
 
-
 ## Tech Stack
 
 | Layer | Technology |
@@ -188,6 +237,10 @@ graph TB
 | Rate Limiting | slowapi (200/min default) |
 | Workers | 1 uvicorn worker (prevent OOM on HF Spaces) |
 
+## Quick Start
+
+**Requirements:** Python 3.11+, and optionally Docker.
+
 ```bash
 # Clone
 git clone https://github.com/AKXLR8/vector-auditor.git
@@ -202,9 +255,9 @@ python -m pip install -r requirements.txt
 
 # Run
 uvicorn src.api.main:app --reload --port 8000
+```
 
-
-Open http://localhost:8000/docs for interactive API docs.
+Open <http://localhost:8000/docs> for interactive API docs.
 
 ## Configuration
 
@@ -223,6 +276,8 @@ Open http://localhost:8000/docs for interactive API docs.
 | `LOG_FORMAT` | No | `json` | `text` for human-readable |
 | `JOB_MAX_CONCURRENT` | No | `5` | Parallel upload jobs |
 
+See [`.env.example`](.env.example) for the full list.
+
 ## API Overview (28 endpoints)
 
 ### Auth `/auth/*`
@@ -240,6 +295,8 @@ Open http://localhost:8000/docs for interactive API docs.
 ### Operations
 `POST /NexAGI` · `POST /feedback` · `GET /admin/dlq` · `POST /cache/flush` · `GET /health` · `GET /readyz` · `GET /metrics`
 
+Full request/response schemas: **[BACKEND_API.md](BACKEND_API.md)**.
+
 ## Deploy
 
 ### Hugging Face Spaces
@@ -249,7 +306,7 @@ git remote add hf https://huggingface.co/spaces/akshayyy1/vector-auditor
 git push hf main
 ```
 
-Set secrets in HF Space Settings → Variables. See `DEPLOY_HF_SPACES.md`.
+Set secrets in HF Space Settings → Variables. See [DEPLOY_HF_SPACES.md](DEPLOY_HF_SPACES.md).
 
 ### Docker
 
@@ -299,8 +356,21 @@ src/
 scripts/                # download_model.py
 alembic/                # DB migrations
 models/                 # embedding_model.pkl (gitignored, built at deploy)
+docs/                   # logo and docs assets
 ```
+
+## Contributing
+
+Contributions are welcome — bug reports, docs, and PRs alike.
+
+1. Fork the repo and create a branch: `git checkout -b feat/your-feature`
+2. Make your change; keep the diff focused.
+3. Add or update tests under `tests/` and run `pytest`.
+4. Open a pull request describing what changed and why.
+
+Found a security issue? Please email the maintainer instead of opening a public
+issue.
 
 ## License
 
-MIT
+Released under the MIT License.
