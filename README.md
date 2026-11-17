@@ -1,12 +1,3 @@
----
-title: VecXAud
-emoji: 🔍
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-pinned: false
----
-
 <p align="center">
   <img src="docs/logo.png" alt="VecXAud" width="420">
 </p>
